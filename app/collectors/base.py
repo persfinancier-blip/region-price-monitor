@@ -25,6 +25,10 @@ class MarketplaceCollector(Protocol):
 
     marketplace: Marketplace
 
-    def collect(self, product: Product, region: Region) -> PriceObservation:
-        """Fetch and parse the current price/availability for a product in a region."""
+    def collect(self, product: Product, region: Region, proxy_url: str | None = None) -> PriceObservation:
+        """Fetch and parse the current price/availability for a product in a region.
+
+        `proxy_url` is a full `http://user:pass@host:port` URL to route the request
+        through, or None for a direct connection.
+        """
         ...

@@ -4,13 +4,20 @@ import argparse
 import asyncio
 import json
 import sys
+import time
 
-from app.collectors.wb import WbCollector
+import requests
+
+from app.collectors.outcome import classify_outcome
+from app.collectors.wb import WbCollectionError, WbCollector
 from app.config import get_settings
 from app.db import get_session
 from app.db import healthcheck as db_healthcheck
-from app.enums import Marketplace, RunMode, RunStatus
+from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
+from app.proxy.static import make_proxy_provider
 from app.repositories import (
+    AttemptRepository,
+    MeasureQueueRepository,
     PriceSnapshotRepository,
     ProductRepository,
     RegionRepository,
@@ -74,18 +81,29 @@ async def _import_regions(path: str) -> int:
     return 0
 
 
-async def _measure_wb(region_code: str, sku: str | None) -> int:
+async def _measure_wb(region_codes: list[str] | None, sku: str | None) -> int:
     collector = WbCollector()
+    settings = get_settings()
+    provider = make_proxy_provider(settings)
+
     async with get_session() as session:
         region_repo = RegionRepository(session)
         product_repo = ProductRepository(session)
         run_repo = RunRepository(session)
         snapshot_repo = PriceSnapshotRepository(session)
+        queue_repo = MeasureQueueRepository(session)
+        attempt_repo = AttemptRepository(session)
 
-        region = await region_repo.get_by_code(region_code)
-        if region is None:
-            print(f"unknown region: {region_code}", file=sys.stderr)
-            return 1
+        if region_codes:
+            regions = []
+            for code in region_codes:
+                region = await region_repo.get_by_code(code)
+                if region is None:
+                    print(f"unknown region: {code}", file=sys.stderr)
+                    return 1
+                regions.append(region)
+        else:
+            regions = await region_repo.list_active()
 
         if sku is not None:
             product = await product_repo.get_by_sku(marketplace=Marketplace.WB, sku=sku)
@@ -98,22 +116,63 @@ async def _measure_wb(region_code: str, sku: str | None) -> int:
 
         run = await run_repo.create(mode=RunMode.MANUAL)
 
-        ok = 0
-        failed = 0
+        stats: dict[str, int] = {}
         for product in products:
-            try:
-                obs = await asyncio.to_thread(collector.collect, product, region)
-            except ValueError as exc:
-                print(f"  failed sku={product.sku}: {exc}", file=sys.stderr)
-                failed += 1
-                continue
-            await snapshot_repo.add(product_id=product.id, region_id=region.id, run_id=run.id, obs=obs)
-            ok += 1
+            for region in regions:
+                queue_item = await queue_repo.create(
+                    run_id=run.id, product_id=product.id, region_id=region.id
+                )
+                lease = await provider.acquire(region.code)
 
-        await run_repo.finish(run, RunStatus.DONE, {"ok": ok, "failed": failed})
+                started = time.monotonic()
+                status_code: int | None = None
+                empty_products = False
+                error: str | None = None
+                obs = None
+                exc_for_timeout: Exception | None = None
+                try:
+                    obs = await asyncio.to_thread(collector.collect, product, region, lease.proxy_url)
+                    status_code = 200
+                except WbCollectionError as exc:
+                    status_code = exc.status_code
+                    empty_products = exc.empty_products
+                    error = str(exc)
+                except requests.Timeout as exc:
+                    exc_for_timeout = exc
+                    error = str(exc)
+                except Exception as exc:  # noqa: BLE001 — classified below, never aborts the run
+                    exc_for_timeout = exc
+                    error = str(exc)
+                duration_ms = int((time.monotonic() - started) * 1000)
+
+                outcome = classify_outcome(
+                    status_code=status_code, exc=exc_for_timeout, empty_products=empty_products
+                )
+
+                if outcome == Outcome.OK and obs is not None:
+                    await snapshot_repo.add(
+                        product_id=product.id, region_id=region.id, run_id=run.id, obs=obs
+                    )
+
+                await attempt_repo.add(
+                    queue_id=queue_item.id,
+                    proxy_ref=lease.ref,
+                    outcome=outcome,
+                    duration_ms=duration_ms,
+                    error=error,
+                )
+                await queue_repo.mark(
+                    queue_item, QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
+                )
+                await provider.report(lease, outcome)
+
+                stats[outcome.value] = stats.get(outcome.value, 0) + 1
+                print(f"  sku={product.sku} region={region.code}: {outcome.value}")
+
+        await run_repo.finish(run, RunStatus.DONE, stats)
         await session.commit()
 
-    print(f"run {run.id}: measured {ok}, failed {failed}")
+    print(f"run {run.id}: " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
     return 0
 
 
@@ -128,8 +187,15 @@ def main(argv: list[str] | None = None) -> int:
     import_regions = subparsers.add_parser("import-regions", help="Upsert regions from a JSON file")
     import_regions.add_argument("file", help="Path to a regions JSON file")
 
-    measure_wb = subparsers.add_parser("measure-wb", help="Measure current WB prices (home region, no proxy)")
-    measure_wb.add_argument("--region", default=None, help="Region code (default: settings.home_region)")
+    measure_wb = subparsers.add_parser(
+        "measure-wb", help="Measure current WB prices across regions (via ProxyProvider)"
+    )
+    measure_wb.add_argument(
+        "--region",
+        action="append",
+        default=None,
+        help="Region code; repeatable (default: all active regions)",
+    )
     measure_wb.add_argument("--sku", default=None, help="WB SKU (nm); default: all active WB products")
 
     args = parser.parse_args(argv)
@@ -141,8 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "import-regions":
         return asyncio.run(_import_regions(args.file))
     if args.command == "measure-wb":
-        region_code = args.region or get_settings().home_region
-        return asyncio.run(_measure_wb(region_code, args.sku))
+        return asyncio.run(_measure_wb(args.region, args.sku))
 
     parser.error(f"unknown command: {args.command}")
     return 2
