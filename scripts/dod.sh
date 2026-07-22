@@ -7,10 +7,7 @@
 
 set -e
 
-# # TBD — команды проверок добавит первый продуктовый промпт
-# Examples:
-#   python -m ruff check . && python -m mypy app && python -m pytest
-#   npm ci && npm run lint && npm run build
-
-echo "DoD gate: no checks configured yet — passing trivially."
-exit 0
+python -m ruff check app tests
+python -m ruff format --check app tests
+python -m mypy app
+python -m pytest -q

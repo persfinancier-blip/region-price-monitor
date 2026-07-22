@@ -2,6 +2,16 @@
 
 Журнал пассов. Каждый пасс воркера заканчивается записью здесь (дата, промпт, что сделано, что проверено).
 
+## 2026-07-22 — Фаза 0: скелет и тулинг (`prompt-01-skeleton`)
+
+- Поднят пустой, но рабочий каркас: пакет `app/` (config, db, cli + пустые `collectors/proxy/queue/scheduler`), `pyproject.toml` (Python 3.12, SQLAlchemy async, asyncpg, alembic, pydantic-settings, requests, `curl_cffi`, playwright, apscheduler, structlog; dev — ruff/mypy/pytest).
+- `app/config.py` — `Settings` на pydantic-settings (`DATABASE_URL`, `SCHEDULE_CRON`, `MAX_CONCURRENCY`, `RETRY_LIMIT`, плейсхолдеры прокси); `.env.example` добавлен, `.env` уже в `.gitignore`.
+- `app/db.py` — async-движок/сессии + `healthcheck()` (`SELECT 1`); Alembic (`migrations/`) подключён к тому же async-движку и пустой metadata.
+- `app/cli.py` — команда `healthcheck`.
+- `Dockerfile` (база `mcr.microsoft.com/playwright/python:v1.48.0-noble` — Python 3.12; тег `v1.46.0-jammy` из промпта нёс Python 3.10, не подошёл) + `docker-compose.yml` (app + postgres:16) + `.dockerignore`.
+- `scripts/dod.sh` — реальные проверки: `ruff check`, `ruff format --check`, `mypy app`, `pytest -q` (ruff/mypy зоны ограничены `app`+`tests`, `spike/` не трогаем).
+- **Проверено:** `sh scripts/dod.sh` зелёный; `alembic upgrade head` проходит на пустой БД; `docker compose up` поднимает app+postgres, `cli healthcheck` возвращает `OK` против compose-postgres.
+
 ## 2026-07-22 — Спайк осуществимости (`prompt-00-spike`)
 
 - Собрана вся стартовая документация: TZ, 4 ADR, ARCHITECTURE, ROADMAP, BACKLOG, промпты.
