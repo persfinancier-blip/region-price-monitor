@@ -7,10 +7,10 @@
 
 - [x] **Фаза −1 — Спайк осуществимости** — ✅ **GO** (2026-07-22). WB через `requests`; Ozon добит: куки + `curl_cffi` (ADR-0005); регион — в куках.
 - [x] **Фаза 0 — Скелет и тулинг** (`prompt-01-skeleton`) — DoD-гейт зелёный, `docker compose up` + `alembic upgrade head` + `cli healthcheck` проверены вживую.
+- [x] **Фаза 1 — Модель данных и миграции** (`prompt-02-schema`) — миграция применяется/откатывается вживую на Postgres 16; CLI-импорт справочников идемпотентен; тесты репозиториев зелёные (`TEST_DATABASE_URL`).
 
 ## Потом
 
-- [ ] Фаза 1 — Модель данных и миграции (`prompt-02-schema`)
 - [ ] Фаза 2 — Коллектор WB, один регион, без прокси (`prompt-03-wb-collector`)
 - [ ] Фаза 3 — Регионализация + ProxyProvider (`prompt-04-regions-proxy`)
 - [ ] Фаза 4 — Коллектор Ozon (`prompt-05-ozon-collector`): `curl_cffi` + куки + компонент **прогрева кук** (Playwright, storage_state, хранилище по «город × площадка») — ADR-0005.
