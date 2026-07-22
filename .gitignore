@@ -28,6 +28,7 @@ dist/
 # Data
 *.db
 *.sqlite3
+data/cookies/
 
 # Editors / OS
 .vscode/
