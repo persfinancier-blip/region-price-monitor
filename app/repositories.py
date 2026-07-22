@@ -8,8 +8,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import PriceObservation
-from app.enums import Marketplace, RunMode, RunStatus
-from app.models import PriceSnapshot, Product, Region, Run
+from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
+from app.models import Attempt, MeasureQueueItem, PriceSnapshot, Product, Region, Run
 
 
 class ProductRepository:
@@ -141,3 +141,53 @@ class PriceSnapshotRepository:
         self._session.add(snapshot)
         await self._session.flush()
         return snapshot
+
+
+class MeasureQueueRepository:
+    """Repository for the `measure_queue` table."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create(self, *, run_id: int, product_id: int, region_id: int) -> MeasureQueueItem:
+        """Insert a pending (run, product, region) queue item."""
+        item = MeasureQueueItem(
+            run_id=run_id, product_id=product_id, region_id=region_id, status=QueueStatus.PENDING
+        )
+        self._session.add(item)
+        await self._session.flush()
+        return item
+
+    async def mark(self, item: MeasureQueueItem, status: QueueStatus) -> MeasureQueueItem:
+        """Update a queue item's status."""
+        item.status = status
+        await self._session.flush()
+        return item
+
+
+class AttemptRepository:
+    """Repository for the insert-only `attempts` table."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(
+        self,
+        *,
+        queue_id: int,
+        proxy_ref: str | None,
+        outcome: Outcome,
+        duration_ms: int,
+        error: str | None = None,
+    ) -> Attempt:
+        """Insert an attempt record for one (queue item) try."""
+        attempt = Attempt(
+            queue_id=queue_id,
+            proxy_ref=proxy_ref,
+            outcome=outcome,
+            error=error,
+            duration_ms=duration_ms,
+        )
+        self._session.add(attempt)
+        await self._session.flush()
+        return attempt

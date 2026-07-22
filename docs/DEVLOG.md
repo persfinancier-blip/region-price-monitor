@@ -53,3 +53,16 @@
 - DoD-гейт (`scripts/dod.sh`) зелёный: ruff + mypy(strict) + pytest — 7 passed, 1 skipped (DB-тест чисто скипается без Postgres).
 - Живая проверка `measure-wb` против реального WB и локального Postgres **не выполнена** в этом пассе — в песочнице нет сетевого доступа к `card.wb.ru` и поднятого Postgres; логика и парсинг проверены юнит-тестами на закоммиченном сэмпле. Требуется ручная проверка владельцем перед закрытием фазы.
 - Итог: код Фазы 2 готов, DoD зелёный. Следующая веха — Фаза 3 (`prompt-04-regions-proxy`).
+
+## 2026-07-23 — Регионализация + ProxyProvider (`prompt-04-regions-proxy`)
+
+- `app/proxy/base.py`: `RegionCode`, frozen `ProxyLease` (`provider`, `region_code`, `proxy_url`, `ref` — некредный маскированный лейбл), `ProxyProvider` (`Protocol`: `acquire`/`report`) по ADR-0003; хелпер `proxy_url_to_requests_dict`.
+- `app/proxy/static.py`: `StaticProxyProvider` — резолвит регион в прокси из `{region_code: proxy_url}` (конфиг), unknown-регион → глобальный `proxy_url` либо прямое соединение (`None`); `ref` маскируется до хоста (без кредов). `report` — no-op (debug-лог), здоровье/ротация — Фаза 6. `make_proxy_provider(settings)` — фабрика по `settings.proxy_provider` (`"static"`; неизвестное значение — явная ошибка). Вендор нигде не хардкожен.
+- `app/config.py` / `.env.example`: добавлен `proxy_map_json` (JSON `{region_code: proxy_url}`, парсится провайдером; невалидный JSON — явная ошибка при конструировании).
+- `app/collectors/base.py` / `wb.py`: `collect(..., proxy_url=None)` — прокидывает `proxies=` в `requests.get`; `proxy_url=None` = поведение Фазы 2 (прямое соединение) без изменений. Новый `WbCollectionError` несёт `status_code`/`empty_products` для классификации исхода.
+- `app/collectors/outcome.py`: чистая `classify_outcome` — 200+товары → `OK`; 403/429 → `HARD_BAN`; `requests.Timeout` → `TIMEOUT`; прочие исключения → `ERROR`; 200 с пустыми `products` → `SOFT_BAN` (триггер: валидный ответ, но `parse_wb_card` не нашёл товаров).
+- `app/repositories.py`: `MeasureQueueRepository` (`create`/`mark`), `AttemptRepository` (`add`) — обе insert/update без блокировок (`SKIP LOCKED` — Фаза 5).
+- CLI `measure-wb`: `--region` теперь повторяемый/опциональный (по умолчанию — все активные регионы); по паре (товар, регион) — создаёт `measure_queue`, берёт `ProxyLease`, замеряет длительность, классифицирует исход, пишет `price_snapshot` при `OK`, всегда пишет `attempts` (`proxy_ref` — маскированный, без кредов), помечает queue-item `done`/`failed`, вызывает `provider.report(...)`; отказ по одной паре не роняет run; `run.stats` — агрегат по исходам; печатается сводка по каждой паре.
+- Тесты: `tests/test_proxy_static.py` (маппинг региона, фолбэк, direct, невалидный JSON), `tests/test_outcome.py` (все ветки классификатора), `tests/test_measure_wb.py` (DB-тест: `measure-wb` пишет `measure_queue` + `attempts` + снапшот на `OK`; скипается чисто без БД, по паттерну Фазы 1). `test_wb_parse.py` не тронут, зелёный.
+- Живых прокси/реального WB в песочнице нет — сетевой сценарий (регион-разные цены) требует ручной проверки владельцем с реальным `proxy_map_json`.
+- Итог: код Фазы 3 готов, DoD зелёный (ruff + mypy strict + pytest: DB-тесты скипаются чисто без Postgres). Следующая веха — Фаза 4 (`prompt-05-ozon-collector`).
