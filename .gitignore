@@ -4,6 +4,12 @@
 !.env.example
 .secrets/
 
+# Spike: browser cookies / dumps — NEVER versioned
+spike/ozon_cookie.txt
+spike/*_dump.txt
+spike/ozon_state.json
+spike/ozon_debug.png
+
 # Python
 __pycache__/
 *.py[cod]

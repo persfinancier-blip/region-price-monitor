@@ -1,0 +1,34 @@
+<svg viewBox="0 0 400 440" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <path id="prizmaStar" d="M0,-11 L2.59,-3.56 L10.46,-3.40 L4.18,1.36 L6.47,8.90 L0,4.4 L-6.47,8.90 L-4.18,1.36 L-10.46,-3.40 L-2.59,-3.56 Z"/>
+  </defs>
+
+  <!-- 12 stars in a ring, alternating black / white -->
+  <g>
+    <use href="#prizmaStar" transform="translate(200,67)"  fill="#000"/>
+    <use href="#prizmaStar" transform="translate(259,83)"  fill="#fff" stroke="#000" stroke-width="1.5"/>
+    <use href="#prizmaStar" transform="translate(302,126)" fill="#000"/>
+    <use href="#prizmaStar" transform="translate(318,185)" fill="#fff" stroke="#000" stroke-width="1.5"/>
+    <use href="#prizmaStar" transform="translate(302,244)" fill="#000"/>
+    <use href="#prizmaStar" transform="translate(259,287)" fill="#fff" stroke="#000" stroke-width="1.5"/>
+    <use href="#prizmaStar" transform="translate(200,303)" fill="#000"/>
+    <use href="#prizmaStar" transform="translate(141,287)" fill="#fff" stroke="#000" stroke-width="1.5"/>
+    <use href="#prizmaStar" transform="translate(98,244)"  fill="#000"/>
+    <use href="#prizmaStar" transform="translate(82,185)"  fill="#fff" stroke="#000" stroke-width="1.5"/>
+    <use href="#prizmaStar" transform="translate(98,126)"  fill="#000"/>
+    <use href="#prizmaStar" transform="translate(141,83)"  fill="#fff" stroke="#000" stroke-width="1.5"/>
+  </g>
+
+  <!-- Central "Y" in the yuan (¥) style -->
+  <g stroke="#000" fill="none" stroke-linecap="round">
+    <line x1="160" y1="120" x2="200" y2="174" stroke-width="15"/>
+    <line x1="240" y1="120" x2="200" y2="174" stroke-width="15"/>
+    <line x1="200" y1="174" x2="200" y2="238" stroke-width="15"/>
+    <line x1="170" y1="195" x2="230" y2="195" stroke-width="8"/>
+    <line x1="170" y1="213" x2="230" y2="213" stroke-width="8"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="204" y="372" text-anchor="middle" font-family="'Segoe UI',Arial,Helvetica,sans-serif" font-size="52" font-weight="800" letter-spacing="8" fill="#000">PRIZMA</text>
+  <text x="207" y="401" text-anchor="middle" font-family="'Segoe UI',Arial,Helvetica,sans-serif" font-size="15" font-weight="600" letter-spacing="10" fill="#000">Y-TECH</text>
+</svg>
