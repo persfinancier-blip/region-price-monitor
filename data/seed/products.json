@@ -1,0 +1,26 @@
+[
+  {
+    "marketplace": "wb",
+    "sku": "12345678",
+    "url": "https://www.wildberries.ru/catalog/12345678/detail.aspx",
+    "name": "Демо-товар WB — кроссовки"
+  },
+  {
+    "marketplace": "wb",
+    "sku": "23456789",
+    "url": "https://www.wildberries.ru/catalog/23456789/detail.aspx",
+    "name": "Демо-товар WB — рюкзак"
+  },
+  {
+    "marketplace": "ozon",
+    "sku": "3129447770",
+    "url": "https://www.ozon.ru/product/3129447770",
+    "name": "Демо-товар Ozon — наушники"
+  },
+  {
+    "marketplace": "ozon",
+    "sku": "4567891230",
+    "url": "https://www.ozon.ru/product/4567891230",
+    "name": "Демо-товар Ozon — чайник"
+  }
+]
