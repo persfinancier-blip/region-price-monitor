@@ -6,7 +6,7 @@
 ## Сейчас
 
 - [x] **Фаза −1 — Спайк осуществимости** — ✅ **GO** (2026-07-22). WB через `requests`; Ozon добит: куки + `curl_cffi` (ADR-0005); регион — в куках.
-- [ ] **Фаза 0 — Скелет и тулинг** (`prompt-01-skeleton`) — **следующая веха** (в deps добавить `curl_cffi`).
+- [x] **Фаза 0 — Скелет и тулинг** (`prompt-01-skeleton`) — DoD-гейт зелёный, `docker compose up` + `alembic upgrade head` + `cli healthcheck` проверены вживую.
 
 ## Потом
 
