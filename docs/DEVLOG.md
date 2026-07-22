@@ -39,3 +39,17 @@
 - Демо-набор: `data/seed/products.json` (2×WB + 2×Ozon), `data/seed/regions.json` (msk/spb/nsk с гео под WB `dest` и Ozon город/координаты).
 - `tests/test_repositories.py`: 4 теста на upsert-идемпотентность и `list_active` для обеих таблиц; фикстура поднимает `alembic upgrade head` и скипает модуль, если `TEST_DATABASE_URL`/`DATABASE_URL` не задан или БД недоступна. **Прогнано вживую** с `TEST_DATABASE_URL` — зелёные; без БД — чисто скипаются (DoD-гейт в CI не требует Postgres).
 - Итог: Фаза 1 закрыта. Следующая веха — Фаза 2 (`prompt-03-wb-collector`).
+
+## 2026-07-22 — Коллектор WB, домашний регион, без прокси (`prompt-03-wb-collector`)
+
+- `app/collectors/base.py`: DTO `PriceObservation` (frozen dataclass, деньги — `Decimal`) и контракт `MarketplaceCollector` (`Protocol`).
+- `app/collectors/wb_parse.py`: чистая функция `parse_wb_card` — разбирает ответ `card.wb.ru` v2 (копейки → `Decimal`, `price_base`/`price` из `basic`/`product`, `price_card = None` в этой фазе — WB-кошелёк считается на клиенте и не приходит в этом эндпоинте), `is_available` по `stocks[].qty > 0`, `ValueError` на пустой/заблокированный ответ.
+- `app/collectors/wb.py`: `WbCollector` (`requests`, без прокси) — собирает запрос из `region.geo["wb"]["dest"]` и `product.sku`, заголовки из спайка (без brotli), таймаут и URL из конфига.
+- `app/config.py`: добавлены `home_region`, `wb_card_url`, `http_timeout_s`.
+- `app/repositories.py`: `RunRepository` (`create`/`finish`), `PriceSnapshotRepository` (`add`, insert-only); точечные `get_by_code`/`get_by_sku` для CLI-обвязки.
+- CLI: `measure-wb` (`--region`, `--sku`) — создаёт `run`, гоняет коллектор через `asyncio.to_thread`, пишет снапшоты, считает ok/failed, печатает сводку; отказ по одному товару не роняет весь run.
+- `tests/fixtures/wb_card_sample.json` + `tests/test_wb_parse.py`: 6 юнит-тестов на `parse_wb_card` без сети — цены из копеек, `price_card is None`, `currency == RUB`, доступность true/false, `ValueError` на пустой `products`.
+- `pyproject.toml`: `types-requests` в dev-экстре (`requests` уже был в рантайм-зависимостях с Фазы 0).
+- DoD-гейт (`scripts/dod.sh`) зелёный: ruff + mypy(strict) + pytest — 7 passed, 1 skipped (DB-тест чисто скипается без Postgres).
+- Живая проверка `measure-wb` против реального WB и локального Postgres **не выполнена** в этом пассе — в песочнице нет сетевого доступа к `card.wb.ru` и поднятого Postgres; логика и парсинг проверены юнит-тестами на закоммиченном сэмпле. Требуется ручная проверка владельцем перед закрытием фазы.
+- Итог: код Фазы 2 готов, DoD зелёный. Следующая веха — Фаза 3 (`prompt-04-regions-proxy`).

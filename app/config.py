@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     proxy_provider: str = "static"
     proxy_url: str | None = None
 
+    home_region: str = "msk"
+    wb_card_url: str = "https://card.wb.ru/cards/v2/detail"
+    http_timeout_s: int = 30
+
 
 def get_settings() -> Settings:
     """Return a fresh Settings instance (reads current environment)."""
