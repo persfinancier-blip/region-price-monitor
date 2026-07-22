@@ -37,3 +37,5 @@
 - `.env.example` present; `.env` gitignored; no secrets in the diff.
 - `docs/DEVLOG.md` updated with a pass entry; `BACKLOG.md` item for Фаза 0 checked off.
 - Merged into `main` via PR with the DoD gate green.
+
+<!-- re-dispatched for Фаза 0 (skeleton), attempt 2, 2026-07-22 -->
