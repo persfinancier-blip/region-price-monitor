@@ -1,0 +1,27 @@
+{
+  "data": {
+    "products": [
+      {
+        "id": 629760017,
+        "name": "Sample product",
+        "brand": "Sample Brand",
+        "time1": 2,
+        "time2": 5,
+        "sizes": [
+          {
+            "name": "M",
+            "price": {
+              "basic": 350000,
+              "product": 259000,
+              "total": 259000
+            },
+            "stocks": [
+              {"wh": 507, "qty": 12},
+              {"wh": 1733, "qty": 0}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
