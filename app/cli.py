@@ -7,10 +7,15 @@ import sys
 import time
 
 import requests
+from curl_cffi.requests.exceptions import RequestException as CurlRequestException
 
 from app.collectors.outcome import classify_outcome
+from app.collectors.ozon import OzonCollectionError, OzonCollector, OzonCookiesUnavailable
 from app.collectors.wb import WbCollectionError, WbCollector
 from app.config import get_settings
+from app.cookies.base import is_stale as cookie_is_stale
+from app.cookies.fs import make_cookie_store
+from app.cookies.warm import CookieWarmer, warm_if_stale
 from app.db import get_session
 from app.db import healthcheck as db_healthcheck
 from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
@@ -176,6 +181,151 @@ async def _measure_wb(region_codes: list[str] | None, sku: str | None) -> int:
     return 0
 
 
+async def _warm_ozon(region_codes: list[str] | None) -> int:
+    settings = get_settings()
+    store = make_cookie_store(settings)
+    warmer = CookieWarmer()
+    provider = make_proxy_provider(settings)
+
+    async with get_session() as session:
+        region_repo = RegionRepository(session)
+        if region_codes:
+            regions = []
+            for code in region_codes:
+                region = await region_repo.get_by_code(code)
+                if region is None:
+                    print(f"unknown region: {code}", file=sys.stderr)
+                    return 1
+                regions.append(region)
+        else:
+            regions = [r for r in await region_repo.list_active() if "ozon" in r.geo]
+
+    for region in regions:
+        lease = await provider.acquire(region.code)
+        warm_if_stale(
+            store, warmer, Marketplace.OZON, region, settings.ozon_cookie_ttl_hours, lease.proxy_url
+        )
+        print(f"  region={region.code}: warmed")
+    return 0
+
+
+async def _measure_ozon(region_codes: list[str] | None, sku: str | None) -> int:
+    settings = get_settings()
+    store = make_cookie_store(settings)
+    collector = OzonCollector(store)
+    provider = make_proxy_provider(settings)
+    interactive = sys.stdin.isatty()
+
+    async with get_session() as session:
+        region_repo = RegionRepository(session)
+        product_repo = ProductRepository(session)
+        run_repo = RunRepository(session)
+        snapshot_repo = PriceSnapshotRepository(session)
+        queue_repo = MeasureQueueRepository(session)
+        attempt_repo = AttemptRepository(session)
+
+        if region_codes:
+            regions = []
+            for code in region_codes:
+                region = await region_repo.get_by_code(code)
+                if region is None:
+                    print(f"unknown region: {code}", file=sys.stderr)
+                    return 1
+                regions.append(region)
+        else:
+            regions = [r for r in await region_repo.list_active() if "ozon" in r.geo]
+
+        if sku is not None:
+            product = await product_repo.get_by_sku(marketplace=Marketplace.OZON, sku=sku)
+            if product is None:
+                print(f"unknown Ozon product: {sku}", file=sys.stderr)
+                return 1
+            products = [product]
+        else:
+            products = [p for p in await product_repo.list_active() if p.marketplace == Marketplace.OZON]
+
+        run = await run_repo.create(mode=RunMode.MANUAL)
+
+        stats: dict[str, int] = {}
+        for product in products:
+            for region in regions:
+                lease = await provider.acquire(region.code)
+
+                if interactive:
+                    warm_if_stale(
+                        store,
+                        CookieWarmer(),
+                        Marketplace.OZON,
+                        region,
+                        settings.ozon_cookie_ttl_hours,
+                        lease.proxy_url,
+                    )
+                else:
+                    bundle = store.load(Marketplace.OZON, region.code)
+                    if bundle is None or cookie_is_stale(bundle, settings.ozon_cookie_ttl_hours):
+                        print(f"  sku={product.sku} region={region.code}: needs warm — skipped")
+                        continue
+
+                queue_item = await queue_repo.create(
+                    run_id=run.id, product_id=product.id, region_id=region.id
+                )
+
+                started = time.monotonic()
+                status_code: int | None = None
+                anti_bot = False
+                error: str | None = None
+                obs = None
+                exc_for_timeout: Exception | None = None
+                try:
+                    obs = await asyncio.to_thread(collector.collect, product, region, lease.proxy_url)
+                    status_code = 200
+                except OzonCookiesUnavailable:
+                    print(f"  sku={product.sku} region={region.code}: needs warm — skipped")
+                    await queue_repo.mark(queue_item, QueueStatus.FAILED)
+                    continue
+                except OzonCollectionError as exc:
+                    status_code = exc.status_code
+                    anti_bot = exc.anti_bot
+                    error = str(exc)
+                except (requests.Timeout, CurlRequestException) as exc:
+                    exc_for_timeout = exc
+                    error = str(exc)
+                except Exception as exc:  # noqa: BLE001 — classified below, never aborts the run
+                    exc_for_timeout = exc
+                    error = str(exc)
+                duration_ms = int((time.monotonic() - started) * 1000)
+
+                outcome = classify_outcome(status_code=status_code, exc=exc_for_timeout, anti_bot=anti_bot)
+
+                if outcome == Outcome.OK and obs is not None:
+                    await snapshot_repo.add(
+                        product_id=product.id, region_id=region.id, run_id=run.id, obs=obs
+                    )
+                if outcome == Outcome.HARD_BAN:
+                    store.mark_stale(Marketplace.OZON, region.code)
+
+                await attempt_repo.add(
+                    queue_id=queue_item.id,
+                    proxy_ref=lease.ref,
+                    outcome=outcome,
+                    duration_ms=duration_ms,
+                    error=error,
+                )
+                await queue_repo.mark(
+                    queue_item, QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
+                )
+                await provider.report(lease, outcome)
+
+                stats[outcome.value] = stats.get(outcome.value, 0) + 1
+                print(f"  sku={product.sku} region={region.code}: {outcome.value}")
+
+        await run_repo.finish(run, RunStatus.DONE, stats)
+        await session.commit()
+
+    print(f"run {run.id}: " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="region-price-monitor")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -198,6 +348,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     measure_wb.add_argument("--sku", default=None, help="WB SKU (nm); default: all active WB products")
 
+    measure_ozon = subparsers.add_parser(
+        "measure-ozon", help="Measure current Ozon prices across regions (via warmed cookies)"
+    )
+    measure_ozon.add_argument(
+        "--region",
+        action="append",
+        default=None,
+        help="Region code; repeatable (default: all active regions with an Ozon geo entry)",
+    )
+    measure_ozon.add_argument("--sku", default=None, help="Ozon SKU; default: all active Ozon products")
+
+    warm_ozon = subparsers.add_parser("warm-ozon", help="Warm Ozon cookies for one or all regions")
+    warm_ozon.add_argument(
+        "--region",
+        action="append",
+        default=None,
+        help="Region code; repeatable (default: all active regions with an Ozon geo entry)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "healthcheck":
@@ -208,6 +377,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_import_regions(args.file))
     if args.command == "measure-wb":
         return asyncio.run(_measure_wb(args.region, args.sku))
+    if args.command == "measure-ozon":
+        return asyncio.run(_measure_ozon(args.region, args.sku))
+    if args.command == "warm-ozon":
+        return asyncio.run(_warm_ozon(args.region))
 
     parser.error(f"unknown command: {args.command}")
     return 2

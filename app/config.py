@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     wb_card_url: str = "https://card.wb.ru/cards/v2/detail"
     http_timeout_s: int = 30
 
+    ozon_api_url: str = "https://www.ozon.ru/api/composer-api.bx/page/json/v2"
+    ozon_impersonate: str = "chrome"
+    cookie_store_dir: str = "data/cookies"
+    ozon_cookie_ttl_hours: int = 12
+
 
 def get_settings() -> Settings:
     """Return a fresh Settings instance (reads current environment)."""
