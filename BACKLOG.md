@@ -14,16 +14,18 @@
 - [x] **Фаза 5 — Оркестрация и расписание** (`prompt-06-orchestration`) — DoD-гейт зелёный (61 passed вживую на Postgres); `TaskQueue`/`PgTaskQueue` (`SKIP LOCKED`, конкурентный `claim` проверен тестом), общий `measure_pair`, ретраи с backoff, worker pool, `Scheduler`(APScheduler) + `run-once`/`serve`. Живая проверка `run-once` на локальном Postgres прошла полный цикл; сетевой сценарий (реальные WB/Ozon через прокси) не выполнен в песочнице — нужна ручная проверка владельцем.
 - [x] **Фаза 6, часть 1 — Наблюдаемость** (`prompt-07-observability`) — DoD-гейт зелёный (83 passed вживую на Postgres); структурные JSON-логи (`app/obs/logging.py`, per-attempt `measurement` + `run.started`/`run.finished`), метрики из `runs`/`attempts` без новой схемы (`app/obs/metrics.py`, `metrics` CLI — человекочитаемо + Prometheus text), `Alerter`-сиим (`app/obs/alerts.py` — `LogAlerter`/`WebhookAlerter`, порог доли успеха ≥0.9 по TZ). Живая проверка на локальном Postgres пройдена (структурные логи + алерт при доле успеха 0 < 0.9 подтверждены). ADR-0007.
 - [x] **Фаза 6, часть 2 — Здоровье прокси/cooldown + антибот-тюнинг** (`prompt-08-proxy-health`) — DoD-гейт зелёный (105 passed вживую на Postgres); `HealthAwareProxyProvider` (декоратор над `ProxyProvider`, ADR-0003) выводит cooldown из `attempts` без новой схемы, `ProxyOnCooldown` → чистый скип без фейкового attempt (`app/proxy/health.py`); общий на пул `RateLimiter` — мин. интервал + джиттер на маркетплейс (`app/collectors/pacing.py`); консистентный по региону fingerprint — WB-заголовки/Ozon `impersonate` (`app/collectors/fingerprint.py`). ROADMAP/prompts-README приведены в соответствие с разбивкой Фазы 6.
+- [x] **Фаза 7, часть 1 — Deploy core** (`prompt-ops-01-deploy`) — прод-`Dockerfile` (non-root, entrypoint = `alembic upgrade head` + `exec`), `docker-compose.prod.yml` (postgres не публикуется наружу, именованные volumes `pgdata`/`cookies`), `Makefile` (build/up/down/migrate/run-once/warm-ozon/metrics/logs), `docs/OPS.md` (раннбук + чеклист боевого прогона). Установщик и выбор хостинга — не входят, см. «Потом». `docs/adr/0008-script-shell-separation.md` зафиксирован (принято, не реализовано).
 
 ## Потом
-- [ ] Фаза 7 — Упаковка и деплой + **zip-автоустановщик** под Windows/Linux (`prompt-ops-01-deploy`) — ADR-0006.
-- [ ] **Фаза 8 — Панель управления** (FastAPI, стиль «Вектор·OS»): дашборд, города (наследование+переопределение), куки, маппинг, редактор скриптов, логи — SPEC-panel, ADR-0006.
+- [ ] Фаза 7, часть 2 — **zip-автоустановщик** под Windows/Linux (`prompt-ops-02`) — ADR-0006.
+- [ ] Выбор хостинга прода — открытый вопрос, снимается перед реальным разворачиванием (см. «Открытые вопросы»).
+- [ ] **Фаза 8 — Панель управления** (FastAPI, стиль «Вектор·OS»): дашборд, города (наследование+переопределение), куки, маппинг, редактор скриптов, логи — SPEC-panel, ADR-0006. Редактор скриптов реализуется с учётом [ADR-0008](docs/adr/0008-script-shell-separation.md) (скрипты + пайплайн в духе GitHub Actions).
 
 ## Открытые вопросы (снять до соответствующей фазы)
 
 - [ ] Выбрать провайдера прокси — интерфейс-первый подход принят (ADR-0003): `ProxyProvider` + `StaticProxyProvider` уже в коде (Фаза 3); коммерческий провайдер (любой) добавляется как ещё одна реализация, не блокирует дальнейшие фазы.
 - [x] **Уточнить масштаб (SKU × регионы × частота)** — удовлетворено для MVP выбором очереди-в-Postgres (Фаза 5, ADR-0004): `TaskQueue` — чистый seam, внешний брокер (Redis/Arq) подключается позже без переписывания коллекторов, если объём вырастет.
-- [ ] Выбрать хостинг прода — до фазы 7.
+- [ ] Выбрать хостинг прода — остаётся открытым; deploy-core (Фаза 7, часть 1) намеренно портируем (docker compose), решение о конкретном хостинге не блокирует запуск/тест.
 - [ ] Финальный список регионов и их гео-параметры.
 - [ ] Полный список нужных ценовых полей (базовая / скидка / картой / Premium).
 - [x] **Определить региональную куку Ozon** — решение (owner, 2026-07-23): не выделять одну куку, хранить **полный прогретый набор** на город (ADR-0005).
