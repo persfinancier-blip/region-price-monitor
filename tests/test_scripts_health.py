@@ -9,8 +9,8 @@ import pytest
 from app.cookies.base import CookieBundle
 from app.enums import Marketplace
 from app.proxy.health import HealthVerdict, ProxyHealthService
-from app.repositories import RegionRepository
 from app.scripts import health
+from app.storage.local import LocalRegionRepository
 
 
 class _FakeRegion:
@@ -19,9 +19,17 @@ class _FakeRegion:
         self.geo = geo
 
 
+class _FakeStorage:
+    def __init__(self) -> None:
+        self.regions = LocalRegionRepository.__new__(LocalRegionRepository)
+
+    async def commit(self) -> None:
+        pass
+
+
 @asynccontextmanager
 async def _fake_session():
-    yield object()
+    yield _FakeStorage()
 
 
 class _FakeCookieStore:
@@ -64,7 +72,7 @@ async def test_run_reports_unhealthy_on_stale_cookie() -> None:
         return HealthVerdict(cooling_down=False, until=None, ban_count=0)
 
     with (
-        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
         patch.object(ProxyHealthService, "verdict", _verdict, autospec=False),
     ):
         report = await health.run(
@@ -90,7 +98,7 @@ async def test_run_fix_triggers_warming_of_stale_cookie() -> None:
         return HealthVerdict(cooling_down=False, until=None, ban_count=0)
 
     with (
-        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
         patch.object(ProxyHealthService, "verdict", _verdict, autospec=False),
     ):
         report = await health.run(
@@ -122,7 +130,7 @@ async def test_run_reports_cooling_down_proxy_unhealthy() -> None:
         return HealthVerdict(cooling_down=False, until=None, ban_count=0)
 
     with (
-        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
         patch.object(ProxyHealthService, "verdict", _verdict, autospec=False),
     ):
         report = await health.run(
@@ -164,7 +172,7 @@ async def test_warm_warms_all_ozon_regions_by_default(capsys) -> None:
     async def list_active_regions(self):
         return [msk, spb]
 
-    with patch.object(RegionRepository, "list_active", list_active_regions, autospec=False):
+    with patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False):
         result = await health.warm(
             None,
             session_factory=_fake_session,
@@ -182,7 +190,7 @@ async def test_warm_unknown_region_exits_1() -> None:
     async def get_by_code(self, code: str):
         return None
 
-    with patch.object(RegionRepository, "get_by_code", get_by_code, autospec=False):
+    with patch.object(LocalRegionRepository, "get_by_code", get_by_code, autospec=False):
         result = await health.warm(
             ["nowhere"],
             session_factory=_fake_session,

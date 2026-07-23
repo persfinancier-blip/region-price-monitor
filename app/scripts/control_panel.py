@@ -1,10 +1,10 @@
-"""`control-panel` script — active (product x region) work set + per-city settings (ADR-0008).
+"""`control-panel` script — active (product x region) work set + per-city settings (ADR-0008/0009).
 
-Wraps `RegionRepository`/`ProductRepository` to yield the same active work set
-`app/scheduler/runner.py::_active_pairs` computes (WB: all active regions;
-Ozon: only regions with an `"ozon"` geo entry), plus a per-city settings view
-(proxy ref masked in the printed output only — the returned data keeps the
-real values for downstream scripts).
+Wraps the storage seam's `products`/`regions` repos to yield the same active
+work set `app/scheduler/runner.py::_active_pairs` computes (WB: all active
+regions; Ozon: only regions with an `"ozon"` geo entry), plus a per-city
+settings view (proxy ref masked in the printed output only — the returned
+data keeps the real values for downstream scripts).
 """
 
 import argparse
@@ -12,12 +12,10 @@ import json
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
-from app.db import get_session
 from app.enums import Marketplace
 from app.models import Product, Region
 from app.proxy.static import parse_proxy_map
-from app.repositories import ProductRepository, RegionRepository
-from app.scheduler.runner import SessionFactory
+from app.storage.factory import StorageFactory, make_storage
 
 _MASK = "***"
 
@@ -39,20 +37,18 @@ class WorkSet:
     cities: list[CitySettings]
 
 
-async def run(session_factory: SessionFactory = get_session, settings: Settings | None = None) -> WorkSet:
+async def run(storage_factory: StorageFactory | None = None, settings: Settings | None = None) -> WorkSet:
     """Return the active work set, mirroring `_active_pairs` semantics exactly.
 
     WB: paired with all active regions. Ozon: paired only with active regions
     that carry an `"ozon"` geo entry.
     """
     settings = settings or get_settings()
+    storage_factory = storage_factory or make_storage(settings)
     proxy_map = parse_proxy_map(settings.proxy_map_json)
-    async with session_factory() as session:
-        product_repo = ProductRepository(session)
-        region_repo = RegionRepository(session)
-
-        products = await product_repo.list_active()
-        regions = await region_repo.list_active()
+    async with storage_factory() as storage:
+        products = await storage.products.list_active()
+        regions = await storage.regions.list_active()
         ozon_regions = [r for r in regions if "ozon" in r.geo]
 
         pairs: list[tuple[Product, Region, Marketplace]] = []
@@ -75,46 +71,52 @@ async def run(session_factory: SessionFactory = get_session, settings: Settings 
     return WorkSet(pairs=pairs, cities=cities)
 
 
-async def import_products(path: str, *, session_factory: SessionFactory = get_session) -> int:
+async def import_products(
+    path: str, *, storage_factory: StorageFactory | None = None, settings: Settings | None = None
+) -> int:
     """Upsert products from a JSON file; print `imported <n> / updated <n>`."""
     with open(path, encoding="utf-8") as fh:
         items = json.load(fh)
 
+    storage_factory = storage_factory or make_storage(settings or get_settings())
     imported = 0
     updated = 0
-    async with session_factory() as session:
-        repo = ProductRepository(session)
-        existing_keys = {(p.marketplace, p.sku) for p in await repo.list_active()}
+    async with storage_factory() as storage:
+        existing_keys = {(p.marketplace, p.sku) for p in await storage.products.list_active()}
         for item in items:
             marketplace = Marketplace(item["marketplace"])
-            await repo.upsert(marketplace=marketplace, sku=item["sku"], url=item["url"], name=item["name"])
+            await storage.products.upsert(
+                marketplace=marketplace, sku=item["sku"], url=item["url"], name=item["name"]
+            )
             if (marketplace, item["sku"]) in existing_keys:
                 updated += 1
             else:
                 imported += 1
-        await session.commit()
+        await storage.commit()
 
     print(f"imported {imported} / updated {updated}")
     return 0
 
 
-async def import_regions(path: str, *, session_factory: SessionFactory = get_session) -> int:
+async def import_regions(
+    path: str, *, storage_factory: StorageFactory | None = None, settings: Settings | None = None
+) -> int:
     """Upsert regions from a JSON file; print `imported <n> / updated <n>`."""
     with open(path, encoding="utf-8") as fh:
         items = json.load(fh)
 
+    storage_factory = storage_factory or make_storage(settings or get_settings())
     imported = 0
     updated = 0
-    async with session_factory() as session:
-        repo = RegionRepository(session)
-        existing_codes = {r.code for r in await repo.list_active()}
+    async with storage_factory() as storage:
+        existing_codes = {r.code for r in await storage.regions.list_active()}
         for item in items:
-            await repo.upsert(code=item["code"], name=item["name"], geo=item["geo"])
+            await storage.regions.upsert(code=item["code"], name=item["name"], geo=item["geo"])
             if item["code"] in existing_codes:
                 updated += 1
             else:
                 imported += 1
-        await session.commit()
+        await storage.commit()
 
     print(f"imported {imported} / updated {updated}")
     return 0

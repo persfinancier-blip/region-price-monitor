@@ -5,19 +5,12 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
-
 from app.enums import Outcome
-from app.models import Attempt
 from app.proxy.base import ProxyLease, ProxyProvider, RegionCode
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
-
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from app.config import Settings
+    from app.storage.factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +52,10 @@ def evaluate_health(
 
 
 class ProxyHealthService:
-    """Reads recent `attempts` for a `proxy_ref` and evaluates its cooldown status."""
+    """Reads recent `attempts` for a `proxy_ref` (via the storage seam) and evaluates cooldown."""
 
-    def __init__(
-        self,
-        session_factory: "Callable[[], AbstractAsyncContextManager[AsyncSession]]",
-        settings: "Settings",
-    ) -> None:
-        self._session_factory = session_factory
+    def __init__(self, storage_factory: "StorageFactory", settings: "Settings") -> None:
+        self._storage_factory = storage_factory
         self._settings = settings
 
     async def verdict(self, region_code: RegionCode, proxy_ref: str) -> HealthVerdict:
@@ -74,18 +63,16 @@ class ProxyHealthService:
         now = datetime.datetime.now(datetime.UTC)
         window_start = now - datetime.timedelta(seconds=self._settings.proxy_health_window_s)
 
-        async with self._session_factory() as session:
-            result = await session.execute(
-                select(func.count(Attempt.id), func.max(Attempt.created_at)).where(
-                    Attempt.proxy_ref == proxy_ref,
-                    Attempt.outcome.in_(_BAN_OUTCOMES),
-                    Attempt.created_at >= window_start,
-                )
+        async with self._storage_factory() as storage:
+            attempts = await storage.attempts.recent_for_proxy_ref(
+                proxy_ref, since=window_start, outcomes=_BAN_OUTCOMES
             )
-            ban_count, last_ban_at = result.one()
+
+        ban_count = len(attempts)
+        last_ban_at = max((a.created_at for a in attempts), default=None)
 
         return evaluate_health(
-            ban_count or 0,
+            ban_count,
             last_ban_at,
             now,
             threshold=self._settings.proxy_ban_threshold,

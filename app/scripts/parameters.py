@@ -1,9 +1,10 @@
-"""`parameters` script — resolved connection/runtime parameters (ADR-0008).
+"""`parameters` script — resolved connection/runtime parameters (ADR-0008/0009).
 
-Wraps `app.config.Settings` + the session factory (`app.db.get_session`) +
-resolved endpoints/paths (WB card URL, Ozon API URL, cookie store dir) into a
-single typed snapshot other scripts consume. Standalone, it prints the
-resolved parameters with secrets/credentials masked.
+Wraps `app.config.Settings` + the storage factory (`app.storage.factory.make_storage`,
+local or Postgres per `settings.storage_backend`) + resolved endpoints/paths
+(WB card URL, Ozon API URL, cookie store dir) into a single typed snapshot
+other scripts consume. Standalone, it prints the resolved parameters with
+secrets/credentials masked.
 """
 
 import argparse
@@ -11,15 +12,15 @@ import sys
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
-from app.db import get_session
 from app.scheduler.runner import SessionFactory
+from app.storage.factory import make_storage
 
 _MASK = "***"
 
 
 @dataclass(frozen=True)
 class Parameters:
-    """A resolved snapshot of settings + session factory + endpoints/paths."""
+    """A resolved snapshot of settings + storage factory + endpoints/paths."""
 
     settings: Settings
     session_factory: SessionFactory
@@ -29,19 +30,36 @@ class Parameters:
 
 
 def run() -> Parameters:
-    """Resolve current settings/session factory/endpoints into a `Parameters` snapshot."""
+    """Resolve current settings/storage factory/endpoints into a `Parameters` snapshot."""
     settings = get_settings()
     return Parameters(
         settings=settings,
-        session_factory=get_session,
+        session_factory=make_storage(settings),
         wb_card_url=settings.wb_card_url,
         ozon_api_url=settings.ozon_api_url,
         cookie_store_dir=settings.cookie_store_dir,
     )
 
 
-async def healthcheck() -> int:
-    """Verify DB connectivity; print `OK`/exit 0, or a failure message/exit 1."""
+async def healthcheck(settings: Settings | None = None) -> int:
+    """Verify storage connectivity: local dir is writable, or Postgres `SELECT 1` succeeds."""
+    settings = settings or get_settings()
+
+    if settings.storage_backend == "local":
+        import os
+
+        try:
+            os.makedirs(settings.local_state_dir, exist_ok=True)
+            probe = os.path.join(settings.local_state_dir, ".healthcheck")
+            with open(probe, "w", encoding="utf-8") as fh:
+                fh.write("ok")
+            os.remove(probe)
+        except OSError as exc:
+            print(f"local storage healthcheck FAILED: {exc}", file=sys.stderr)
+            return 1
+        print("OK")
+        return 0
+
     from app.db import healthcheck as db_healthcheck
 
     try:

@@ -159,6 +159,11 @@ class PriceSnapshotRepository:
         await self._session.flush()
         return snapshot
 
+    async def list_all(self) -> list[PriceSnapshot]:
+        """Return every snapshot (panel Dashboard's latest-per-pair reduction runs in Python)."""
+        result = await self._session.execute(select(PriceSnapshot))
+        return list(result.scalars().all())
+
 
 class MeasureQueueRepository:
     """Repository for the `measure_queue` table."""
@@ -218,3 +223,25 @@ class AttemptRepository:
         self._session.add(attempt)
         await self._session.flush()
         return attempt
+
+    async def recent_for_proxy_ref(
+        self, proxy_ref: str, *, since: datetime.datetime, outcomes: tuple[Outcome, ...]
+    ) -> list[Attempt]:
+        """Attempts for `proxy_ref` with one of `outcomes`, created at/after `since`."""
+        result = await self._session.execute(
+            select(Attempt).where(
+                Attempt.proxy_ref == proxy_ref,
+                Attempt.outcome.in_(outcomes),
+                Attempt.created_at >= since,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def for_run(self, run_id: int) -> list[Attempt]:
+        """All attempts belonging to queue items of `run_id` (joined via `measure_queue`)."""
+        result = await self._session.execute(
+            select(Attempt)
+            .join(MeasureQueueItem, Attempt.queue_id == MeasureQueueItem.id)
+            .where(MeasureQueueItem.run_id == run_id)
+        )
+        return list(result.scalars().all())

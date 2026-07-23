@@ -21,6 +21,7 @@ from app.config import Settings, get_settings
 from app.enums import RunMode
 from app.scheduler.runner import RunSummary, Scheduler, SessionFactory, run_once
 from app.scripts import control_panel, health, parameters
+from app.storage.factory import make_storage
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ async def run(
     run before it, and returns the resulting `RunSummary`.
     """
     resolved_settings = settings or get_settings()
-    resolved_factory = session_factory or parameters.run().session_factory
+    resolved_factory = session_factory or make_storage(resolved_settings)
 
     summary_holder: dict[str, RunSummary] = {}
 
@@ -119,7 +120,7 @@ async def run(
 async def serve(*, session_factory: SessionFactory | None = None, settings: Settings | None = None) -> int:
     """Start the cron daemon: schedule `run(mode=RunMode.SCHEDULED)` on `settings.schedule_cron`, block."""
     resolved_settings = settings or get_settings()
-    resolved_factory = session_factory or parameters.run().session_factory
+    resolved_factory = session_factory or make_storage(resolved_settings)
 
     async def _job() -> RunSummary:
         return await run(

@@ -9,12 +9,8 @@ from app.enums import Outcome
 from app.proxy.base import ProxyLease, ProxyProvider, RegionCode
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from contextlib import AbstractAsyncContextManager
-
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from app.config import Settings
+    from app.storage.factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +63,12 @@ class StaticProxyProvider:
 def make_proxy_provider(
     settings: "Settings",
     *,
-    session_factory: "Callable[[], AbstractAsyncContextManager[AsyncSession]] | None" = None,
+    storage_factory: "StorageFactory | None" = None,
 ) -> ProxyProvider:
     """Factory: pick a ProxyProvider implementation by `settings.proxy_provider`.
 
     Wraps the base provider with `HealthAwareProxyProvider` when
-    `settings.proxy_health_enabled` and a `session_factory` is supplied (Фаза 6.2);
+    `settings.proxy_health_enabled` and a `storage_factory` is supplied (Фаза 6.2);
     without a factory (pure CLI `measure-*`), behaviour is unchanged.
     """
     if settings.proxy_provider != "static":
@@ -81,9 +77,9 @@ def make_proxy_provider(
     proxy_map = parse_proxy_map(settings.proxy_map_json)
     base: ProxyProvider = StaticProxyProvider(proxy_map, settings.proxy_url)
 
-    if settings.proxy_health_enabled and session_factory is not None:
+    if settings.proxy_health_enabled and storage_factory is not None:
         from app.proxy.health import HealthAwareProxyProvider, ProxyHealthService
 
-        health = ProxyHealthService(session_factory, settings)
+        health = ProxyHealthService(storage_factory, settings)
         return HealthAwareProxyProvider(base, health, settings)
     return base

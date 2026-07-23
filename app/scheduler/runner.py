@@ -1,14 +1,12 @@
-"""Run lifecycle (`run_once`) and the cron-driven `Scheduler` wrapper (ADR-0004)."""
+"""Run lifecycle (`run_once`) and the cron-driven `Scheduler` wrapper (ADR-0004, ADR-0009)."""
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.measure import measure_pair
 from app.collectors.ozon import OzonCollector
@@ -23,20 +21,22 @@ from app.obs.metrics import RunMetrics, compute_run_metrics
 from app.proxy.base import ProxyProvider
 from app.proxy.static import make_proxy_provider
 from app.queue.base import Pair, QueueItem
-from app.queue.postgres import make_task_queue
-from app.repositories import (
-    AttemptRepository,
-    MeasureQueueRepository,
-    PriceSnapshotRepository,
-    ProductRepository,
-    RegionRepository,
-    RunRepository,
-)
+from app.queue.factory import make_task_queue
 from app.scheduler.retry import backoff_delay, is_retriable
+from app.storage.base import (
+    AttemptRepositoryProto,
+    MeasureQueueRepositoryProto,
+    PriceSnapshotRepositoryProto,
+    ProductRepositoryProto,
+    RegionRepositoryProto,
+)
+from app.storage.factory import StorageFactory
 
 logger = logging.getLogger(__name__)
 
-SessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+# Kept as the injectable-dependency type name across scripts/tests; now yields a
+# `Storage` bundle (local or Postgres) rather than a raw SQLAlchemy session.
+SessionFactory = StorageFactory
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class RunSummary:
 
 
 async def _active_pairs(
-    product_repo: ProductRepository, region_repo: RegionRepository
+    product_repo: ProductRepositoryProto, region_repo: RegionRepositoryProto
 ) -> list[tuple[int, int, Marketplace]]:
     """Active (product_id, region_id, marketplace) tuples.
 
@@ -76,11 +76,11 @@ async def _process_item(
     ozon_collector: OzonCollector,
     cookie_store: CookieStore,
     interactive: bool,
-    product_repo: ProductRepository,
-    region_repo: RegionRepository,
-    queue_repo: MeasureQueueRepository,
-    attempt_repo: AttemptRepository,
-    snapshot_repo: PriceSnapshotRepository,
+    product_repo: ProductRepositoryProto,
+    region_repo: RegionRepositoryProto,
+    queue_repo: MeasureQueueRepositoryProto,
+    attempt_repo: AttemptRepositoryProto,
+    snapshot_repo: PriceSnapshotRepositoryProto,
     pacer: RateLimiter,
 ) -> Outcome | None:
     product = await product_repo.get_by_id(item.product_id)
@@ -119,7 +119,7 @@ async def _process_item(
 
 
 async def _worker(
-    session_factory: SessionFactory,
+    storage_factory: SessionFactory,
     settings: Settings,
     semaphore: asyncio.Semaphore,
     interactive: bool,
@@ -127,23 +127,18 @@ async def _worker(
     stats_lock: asyncio.Lock,
     pacer: RateLimiter,
 ) -> None:
-    provider = make_proxy_provider(settings, session_factory=session_factory)
+    provider = make_proxy_provider(settings, storage_factory=storage_factory)
     cookie_store = make_cookie_store(settings)
     wb_collector = WbCollector()
     ozon_collector = OzonCollector(cookie_store)
 
     while True:
         async with semaphore:
-            async with session_factory() as session:
-                queue = make_task_queue(session)
-                product_repo = ProductRepository(session)
-                region_repo = RegionRepository(session)
-                queue_repo = MeasureQueueRepository(session)
-                attempt_repo = AttemptRepository(session)
-                snapshot_repo = PriceSnapshotRepository(session)
+            async with storage_factory() as storage:
+                queue = make_task_queue(settings, storage)
 
                 items = await queue.claim(settings.queue_claim_batch)
-                await session.commit()
+                await storage.commit()
                 if not items:
                     return
 
@@ -156,16 +151,16 @@ async def _worker(
                         ozon_collector=ozon_collector,
                         cookie_store=cookie_store,
                         interactive=interactive,
-                        product_repo=product_repo,
-                        region_repo=region_repo,
-                        queue_repo=queue_repo,
-                        attempt_repo=attempt_repo,
-                        snapshot_repo=snapshot_repo,
+                        product_repo=storage.products,
+                        region_repo=storage.regions,
+                        queue_repo=storage.queue_items,
+                        attempt_repo=storage.attempts,
+                        snapshot_repo=storage.snapshots,
                         pacer=pacer,
                     )
                     terminal_status = QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
                     await queue.complete(item, terminal_status)
-                    await session.commit()
+                    await storage.commit()
 
                     async with stats_lock:
                         key = outcome.value if outcome is not None else "skipped"
@@ -173,23 +168,20 @@ async def _worker(
 
 
 async def run_once(
-    session_factory: SessionFactory,
+    storage_factory: SessionFactory,
     settings: Settings,
     *,
     mode: RunMode = RunMode.MANUAL,
     interactive: bool = False,
 ) -> RunSummary:
     """Create a run, enqueue all active pairs, drain the queue via a worker pool, finalize stats."""
-    async with session_factory() as session:
-        run_repo = RunRepository(session)
-        product_repo = ProductRepository(session)
-        region_repo = RegionRepository(session)
-        queue = make_task_queue(session)
+    async with storage_factory() as storage:
+        queue = make_task_queue(settings, storage)
 
-        run = await run_repo.create(mode=mode)
-        pairs = await _active_pairs(product_repo, region_repo)
+        run = await storage.runs.create(mode=mode)
+        pairs = await _active_pairs(storage.products, storage.regions)
         await queue.enqueue(run.id, [Pair(product_id=p, region_id=r) for p, r, _mp in pairs])
-        await session.commit()
+        await storage.commit()
         run_id = run.id
 
     logger.info("run.started", extra={"run_id": run_id, "mode": mode.value, "pairs": len(pairs)})
@@ -200,20 +192,19 @@ async def run_once(
     pacer = make_rate_limiter(settings)
 
     workers = [
-        _worker(session_factory, settings, semaphore, interactive, stats, stats_lock, pacer)
+        _worker(storage_factory, settings, semaphore, interactive, stats, stats_lock, pacer)
         for _ in range(settings.max_concurrency)
     ]
     await asyncio.gather(*workers)
 
-    async with session_factory() as session:
-        run_repo = RunRepository(session)
-        finished_run = await run_repo.get(run_id)
+    async with storage_factory() as storage:
+        finished_run = await storage.runs.get(run_id)
         if finished_run is not None:
-            await run_repo.finish(finished_run, RunStatus.DONE, stats)
-        await session.commit()
+            await storage.runs.finish(finished_run, RunStatus.DONE, stats)
+        await storage.commit()
 
-    async with session_factory() as session:
-        metrics = await compute_run_metrics(session, run_id)
+    async with storage_factory() as storage:
+        metrics = await compute_run_metrics(storage, run_id)
 
     logger.info(
         "run.finished",

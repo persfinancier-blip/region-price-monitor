@@ -1,6 +1,9 @@
 services:
+  # Optional: only started with `--profile postgres` (or `docker compose --profile postgres up`).
+  # Local mode (default, ADR-0009) needs no database at all — `app` runs standalone below.
   postgres:
     image: postgres:16
+    profiles: ["postgres"]
     env_file: .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -18,11 +21,9 @@ services:
   app:
     build: .
     env_file: .env
-    depends_on:
-      postgres:
-        condition: service_healthy
     volumes:
       - cookies:/srv/app/data/cookies
+      - state:/srv/app/data/state
     command: ["serve"]
     restart: unless-stopped
 
@@ -31,9 +32,9 @@ services:
   # panel:
   #   build: .
   #   env_file: .env
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
+  #   volumes:
+  #     - cookies:/srv/app/data/cookies
+  #     - state:/srv/app/data/state
   #   command: ["panel", "--host", "0.0.0.0", "--port", "8000"]
   #   ports:
   #     - "127.0.0.1:8000:8000"
@@ -42,3 +43,4 @@ services:
 volumes:
   pgdata:
   cookies:
+  state:

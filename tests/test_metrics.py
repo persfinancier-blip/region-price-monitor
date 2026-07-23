@@ -113,6 +113,7 @@ async def test_compute_run_metrics_aggregates_mixed_attempts(session: AsyncSessi
         RegionRepository,
         RunRepository,
     )
+    from app.storage.postgres import PostgresStorage
 
     product_repo = ProductRepository(session)
     region_repo = RegionRepository(session)
@@ -138,7 +139,7 @@ async def test_compute_run_metrics_aggregates_mixed_attempts(session: AsyncSessi
     )
     await session.flush()
 
-    metrics = await compute_run_metrics(session, run.id)
+    metrics = await compute_run_metrics(PostgresStorage(session), run.id)
 
     assert metrics.total == 2
     assert metrics.by_outcome[Outcome.OK.value] == 1

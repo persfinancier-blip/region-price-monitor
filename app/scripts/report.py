@@ -12,20 +12,19 @@ import asyncio
 import logging
 import sys
 
-from sqlalchemy import select
-
-from app.db import get_session
-from app.models import Run
+from app.config import get_settings
 from app.obs.metrics import compute_run_metrics, to_prometheus
 from app.scheduler.runner import SessionFactory
+from app.storage.factory import make_storage
 
 
-async def run(run_id: int | None, last: bool, *, session_factory: SessionFactory = get_session) -> int:
+async def run(run_id: int | None, last: bool, *, session_factory: SessionFactory | None = None) -> int:
     """Resolve `--run`/`--last`, print the metrics summary + Prometheus text, log structured `metrics`."""
-    async with session_factory() as session:
+    session_factory = session_factory or make_storage(get_settings())
+    async with session_factory() as storage:
         if last:
-            result = await session.execute(select(Run).order_by(Run.id.desc()).limit(1))
-            run_row = result.scalar_one_or_none()
+            runs = await storage.runs.list_recent(1)
+            run_row = runs[0] if runs else None
             if run_row is None:
                 print("no runs found", file=sys.stderr)
                 return 1
@@ -36,7 +35,7 @@ async def run(run_id: int | None, last: bool, *, session_factory: SessionFactory
             print("either --run or --last is required", file=sys.stderr)
             return 1
 
-        metrics = await compute_run_metrics(session, target_run_id)
+        metrics = await compute_run_metrics(storage, target_run_id)
 
     print(
         f"run {metrics.run_id}: total={metrics.total} "

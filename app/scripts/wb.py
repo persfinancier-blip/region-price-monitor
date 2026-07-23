@@ -19,26 +19,18 @@ from app.collectors.wb import WbCollector
 from app.config import Settings, get_settings
 from app.cookies.base import CookieStore
 from app.cookies.fs import make_cookie_store
-from app.db import get_session
 from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
 from app.proxy.base import ProxyProvider
 from app.proxy.static import make_proxy_provider
-from app.repositories import (
-    AttemptRepository,
-    MeasureQueueRepository,
-    PriceSnapshotRepository,
-    ProductRepository,
-    RegionRepository,
-    RunRepository,
-)
 from app.scheduler.runner import SessionFactory
+from app.storage.factory import make_storage
 
 
 async def run(
     region_codes: list[str] | None,
     sku: str | None,
     *,
-    session_factory: SessionFactory = get_session,
+    session_factory: SessionFactory | None = None,
     settings: Settings | None = None,
     provider: ProxyProvider | None = None,
     cookie_store: CookieStore | None = None,
@@ -52,45 +44,39 @@ async def run(
     line per pair plus a final summary line, and returns the process exit code.
     """
     settings = settings or get_settings()
+    session_factory = session_factory or make_storage(settings)
     provider = provider or make_proxy_provider(settings)
     cookie_store = cookie_store or make_cookie_store(settings)
     wb_collector = wb_collector or WbCollector()
     ozon_collector = ozon_collector or OzonCollector(cookie_store)
 
-    async with session_factory() as session:
-        region_repo = RegionRepository(session)
-        product_repo = ProductRepository(session)
-        run_repo = RunRepository(session)
-        snapshot_repo = PriceSnapshotRepository(session)
-        queue_repo = MeasureQueueRepository(session)
-        attempt_repo = AttemptRepository(session)
-
+    async with session_factory() as storage:
         if region_codes:
             regions = []
             for code in region_codes:
-                region = await region_repo.get_by_code(code)
+                region = await storage.regions.get_by_code(code)
                 if region is None:
                     print(f"unknown region: {code}", file=sys.stderr)
                     return 1
                 regions.append(region)
         else:
-            regions = await region_repo.list_active()
+            regions = await storage.regions.list_active()
 
         if sku is not None:
-            product = await product_repo.get_by_sku(marketplace=Marketplace.WB, sku=sku)
+            product = await storage.products.get_by_sku(marketplace=Marketplace.WB, sku=sku)
             if product is None:
                 print(f"unknown WB product: {sku}", file=sys.stderr)
                 return 1
             products = [product]
         else:
-            products = [p for p in await product_repo.list_active() if p.marketplace == Marketplace.WB]
+            products = [p for p in await storage.products.list_active() if p.marketplace == Marketplace.WB]
 
-        run_row = await run_repo.create(mode=RunMode.MANUAL)
+        run_row = await storage.runs.create(mode=RunMode.MANUAL)
 
         stats: dict[str, int] = {}
         for product in products:
             for region in regions:
-                queue_item = await queue_repo.create(
+                queue_item = await storage.queue_items.create(
                     run_id=run_row.id, product_id=product.id, region_id=region.id
                 )
 
@@ -105,20 +91,20 @@ async def run(
                     settings=settings,
                     interactive=False,
                     queue_id=queue_item.id,
-                    snapshot_repo=snapshot_repo,
-                    attempt_repo=attempt_repo,
+                    snapshot_repo=storage.snapshots,
+                    attempt_repo=storage.attempts,
                 )
                 assert outcome is not None  # WB never returns the Ozon "needs warm" sentinel
 
-                await queue_repo.mark(
+                await storage.queue_items.mark(
                     queue_item, QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
                 )
 
                 stats[outcome.value] = stats.get(outcome.value, 0) + 1
                 print(f"  sku={product.sku} region={region.code}: {outcome.value}")
 
-        await run_repo.finish(run_row, RunStatus.DONE, stats)
-        await session.commit()
+        await storage.runs.finish(run_row, RunStatus.DONE, stats)
+        await storage.commit()
 
     print(f"run {run_row.id}: " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
     return 0
