@@ -1,5 +1,6 @@
 """run_once over stubbed collectors — requires a real Postgres; skips cleanly when unreachable."""
 
+import datetime
 import os
 import subprocess
 import sys
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.collectors.base import PriceObservation
 from app.config import Settings
 from app.db import make_engine
-from app.enums import Marketplace, Outcome, RunMode
+from app.enums import Marketplace, Outcome, QueueStatus, RunMode
 from app.models import Attempt, MeasureQueueItem, PriceSnapshot
 from app.repositories import ProductRepository, RegionRepository
 
@@ -280,3 +281,63 @@ async def test_run_once_success_at_threshold_does_not_fire_alert(session: AsyncS
     assert summary.metrics is not None
     assert summary.metrics.success_rate == 1.0
     assert len(sent_alerts) == 0
+
+
+async def test_run_once_skips_cooling_down_region_without_attempt(session: AsyncSession) -> None:
+    """A stubbed provider raising ProxyOnCooldown skips the pair: no attempt row, terminal queue item."""
+    from app.proxy.base import ProxyLease
+    from app.proxy.health import ProxyOnCooldown
+    from app.scheduler.runner import run_once
+
+    product_repo = ProductRepository(session)
+    region_repo = RegionRepository(session)
+
+    product = await product_repo.upsert(
+        marketplace=Marketplace.WB, sku="runner-test-sku-cooldown", url="https://example.com/p", name="P"
+    )
+    region = await region_repo.upsert(code="runner-test-region-cooldown", name="R", geo={"wb": {"dest": 1}})
+    await session.commit()
+
+    settings = Settings(max_concurrency=1, retry_limit=3, queue_claim_batch=10, retry_backoff_base_s=0.0)
+    factory = _session_factory()
+
+    async def only_active_products():
+        return [product]
+
+    async def only_active_regions():
+        return [region]
+
+    class _CoolingProvider:
+        async def acquire(self, region_code: str) -> ProxyLease:
+            until = datetime.datetime.now(datetime.UTC)
+            raise ProxyOnCooldown(region_code, "static:runner-test-region-cooldown:1.2.3.4", until)
+
+        async def report(self, lease: ProxyLease, outcome: Outcome) -> None:
+            return None
+
+    with (
+        patch.object(ProductRepository, "list_active", side_effect=only_active_products, autospec=False),
+        patch.object(RegionRepository, "list_active", side_effect=only_active_regions, autospec=False),
+        patch("app.scheduler.runner.make_proxy_provider", return_value=_CoolingProvider()),
+    ):
+        summary = await run_once(factory, settings, mode=RunMode.MANUAL, interactive=False)
+
+    async with factory() as verify_session:
+        queue_result = await verify_session.execute(
+            select(MeasureQueueItem).where(
+                MeasureQueueItem.run_id == summary.run_id,
+                MeasureQueueItem.product_id == product.id,
+                MeasureQueueItem.region_id == region.id,
+            )
+        )
+        queue_item = queue_result.scalar_one()
+        assert queue_item.status == QueueStatus.FAILED
+
+        attempt_result = await verify_session.execute(
+            select(Attempt).where(Attempt.queue_id == queue_item.id)
+        )
+        assert attempt_result.scalars().all() == []
+
+    assert summary.stats.get("skipped", 0) == 1
+    assert summary.metrics is not None
+    assert summary.metrics.ban_rate == 0.0

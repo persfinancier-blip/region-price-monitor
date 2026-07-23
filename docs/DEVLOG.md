@@ -138,3 +138,42 @@
   `Alerter`-сиим, здоровье прокси/антибот — в `prompt-08`).
 - Итог: код первой половины Фазы 6 готов, DoD зелёный (ruff + mypy strict + pytest). Следующая
   веха — вторая половина Фазы 6, `prompt-08` (здоровье прокси/cooldown + антибот-тюнинг).
+
+## 2026-07-23 — Фаза 6, часть 2: здоровье прокси/cooldown + антибот-тюнинг (`prompt-08-proxy-health`)
+
+- **Здоровье прокси — из `attempts`, без новой схемы** (`app/proxy/health.py`, ADR-0007 §4):
+  чистая `evaluate_health(ban_count, last_ban_at, now, threshold, cooldown_s) -> HealthVerdict`;
+  `ProxyHealthService` агрегирует недавние `HARD_BAN`/`SOFT_BAN` для `proxy_ref` в скользящем
+  окне (`proxy_health_window_s`) коротким read-запросом; `HealthAwareProxyProvider` — декоратор
+  над базовым `ProxyProvider` (сиим ADR-0003 не тронут): `acquire` бросает `ProxyOnCooldown`,
+  если прокси остывает, `report` делегирует + логирует `proxy.health`. На ошибке health-сервиса —
+  fail-open (не остывающий) с логом, ран не падает.
+- **`make_proxy_provider(settings, session_factory=...)`** оборачивает `StaticProxyProvider` в
+  `HealthAwareProxyProvider`, когда `proxy_health_enabled` и передан `session_factory`; без
+  фактора (CLI `measure-*`) поведение не меняется. `runner.py` передаёт `session_factory` в
+  воркеры.
+- **Cooldown → чистый скип** (`measure_pair`): `ProxyOnCooldown` ловится до сетевого вызова,
+  логируется `proxy.cooldown` (region, proxy_ref, until), возвращается тот же sentinel `None`,
+  что и Ozon-прогрев — без фейкового `attempts`-ряда; в `_process_item` это уже терминально
+  (без ретрая).
+- **Антибот-темп** (`app/collectors/pacing.py`): `RateLimiter` — мин. интервал + случайный
+  джиттер на маркетплейс (`wb_min_interval_s`, `ozon_min_interval_s`, `request_jitter_s`), один
+  инстанс на пул воркеров (не на воркера); `NullRateLimiter` — дефолт для `measure_pair`, чтобы
+  CLI и тесты не зависели от паттерна.
+- **Fingerprint-консистентность** (`app/collectors/fingerprint.py`): `wb_headers(region)` —
+  детерминированный по региону UA/`sec-ch-ua` (стабильный хэш кода региона → индекс в списке
+  разрешённых identity, дефолт сохранён на индексе 0); `ozon_impersonate(region, settings)` —
+  аналогично для `curl_cffi`. Никогда не рандомизируется по запросу — только по региону.
+- **Конфиг**: `proxy_health_enabled/proxy_ban_threshold/proxy_health_window_s/proxy_cooldown_s`,
+  `wb_min_interval_s/ozon_min_interval_s/request_jitter_s` — в `app/config.py` и `.env.example`.
+- Тесты: `tests/test_proxy_health.py` (чистая арифметика `evaluate_health` — все ветки и
+  граница `until`; декоратор с зафейканным сервисом — cooldown/passthrough/fail-open; DB-тест
+  `ProxyHealthService.verdict` на живых `attempts`), `tests/test_pacing.py` (мин.интервал +
+  джиттер с патченным `asyncio.get_running_loop`/`sleep` — без реального сна),
+  `tests/test_fingerprint.py` (детерминизм по региону, дефолт в разрешённом множестве),
+  `tests/test_runner.py::test_run_once_skips_cooling_down_region_without_attempt` (стаб-провайдер
+  с `ProxyOnCooldown` → скип без attempt-ряда, терминальный queue item, `ban_rate` не растёт).
+  Вживую на локальном Postgres 16 — 105 passed (все более ранние фазы зелёные).
+- ROADMAP/prompts-README/BACKLOG приведены в соответствие с разбивкой Фазы 6 на 6.1/6.2.
+- Итог: Фаза 6 закрыта целиком. TZ-требование «устойчивость к антиботу» (остывание банов,
+  человекоподобный темп, консистентный fingerprint) удовлетворено для MVP.

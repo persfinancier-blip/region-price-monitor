@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.measure import measure_pair
 from app.collectors.ozon import OzonCollector
+from app.collectors.pacing import RateLimiter, make_rate_limiter
 from app.collectors.wb import WbCollector
 from app.config import Settings
 from app.cookies.base import CookieStore
@@ -80,6 +81,7 @@ async def _process_item(
     queue_repo: MeasureQueueRepository,
     attempt_repo: AttemptRepository,
     snapshot_repo: PriceSnapshotRepository,
+    pacer: RateLimiter,
 ) -> Outcome | None:
     product = await product_repo.get_by_id(item.product_id)
     region = await region_repo.get_by_id(item.region_id)
@@ -103,6 +105,7 @@ async def _process_item(
             queue_id=item.id,
             snapshot_repo=snapshot_repo,
             attempt_repo=attempt_repo,
+            pacer=pacer,
         )
         if outcome is None:
             return None
@@ -122,8 +125,9 @@ async def _worker(
     interactive: bool,
     stats: dict[str, int],
     stats_lock: asyncio.Lock,
+    pacer: RateLimiter,
 ) -> None:
-    provider = make_proxy_provider(settings)
+    provider = make_proxy_provider(settings, session_factory=session_factory)
     cookie_store = make_cookie_store(settings)
     wb_collector = WbCollector()
     ozon_collector = OzonCollector(cookie_store)
@@ -157,6 +161,7 @@ async def _worker(
                         queue_repo=queue_repo,
                         attempt_repo=attempt_repo,
                         snapshot_repo=snapshot_repo,
+                        pacer=pacer,
                     )
                     terminal_status = QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
                     await queue.complete(item, terminal_status)
@@ -192,9 +197,10 @@ async def run_once(
     stats: dict[str, int] = {}
     stats_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(settings.max_concurrency)
+    pacer = make_rate_limiter(settings)
 
     workers = [
-        _worker(session_factory, settings, semaphore, interactive, stats, stats_lock)
+        _worker(session_factory, settings, semaphore, interactive, stats, stats_lock, pacer)
         for _ in range(settings.max_concurrency)
     ]
     await asyncio.gather(*workers)

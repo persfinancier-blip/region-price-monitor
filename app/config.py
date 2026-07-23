@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     proxy_url: str | None = None
     proxy_map_json: str | None = None
 
+    proxy_health_enabled: bool = True
+    proxy_ban_threshold: int = 3
+    proxy_health_window_s: int = 900
+    proxy_cooldown_s: int = 1800
+
+    wb_min_interval_s: float = 1.0
+    ozon_min_interval_s: float = 2.0
+    request_jitter_s: float = 0.5
+
     home_region: str = "msk"
     wb_card_url: str = "https://card.wb.ru/cards/v2/detail"
     http_timeout_s: int = 30
