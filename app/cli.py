@@ -11,7 +11,7 @@ import sys
 
 from app.config import get_settings
 from app.obs.logging import configure_logging
-from app.scripts import control_panel, health, orchestrator, ozon, panel, parameters, report, wb
+from app.scripts import control_panel, export, health, orchestrator, ozon, panel, parameters, report, wb
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -20,10 +20,14 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("healthcheck", help="Verify DB connectivity")
 
     import_products = subparsers.add_parser("import-products", help="Upsert products from a JSON file")
-    import_products.add_argument("file", help="Path to a products JSON file")
+    import_products.add_argument(
+        "file", nargs="?", default=None, help="Path to a products JSON file (default: configured source)"
+    )
 
     import_regions = subparsers.add_parser("import-regions", help="Upsert regions from a JSON file")
-    import_regions.add_argument("file", help="Path to a regions JSON file")
+    import_regions.add_argument(
+        "file", nargs="?", default=None, help="Path to a regions JSON file (default: configured source)"
+    )
 
     measure_wb = subparsers.add_parser(
         "measure-wb", help="Measure current WB prices across regions (via ProxyProvider)"
@@ -71,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     metrics_group.add_argument("--run", type=int, default=None, dest="run_id", help="Run id")
     metrics_group.add_argument("--last", action="store_true", help="Most recent run")
 
+    export_parser = subparsers.add_parser("export", help="Write price snapshots through the configured sink")
+    export_parser.add_argument(
+        "--preview", action="store_true", help="Print the first mapped rows instead of writing"
+    )
+
     args = parser.parse_args(argv)
 
     configure_logging(get_settings())
@@ -83,9 +92,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "healthcheck":
         return asyncio.run(parameters.healthcheck())
     if args.command == "import-products":
-        return asyncio.run(control_panel.import_products(args.file))
+        if args.file:
+            return asyncio.run(control_panel.import_products(args.file))
+        return asyncio.run(control_panel.import_products_from_source())
     if args.command == "import-regions":
-        return asyncio.run(control_panel.import_regions(args.file))
+        if args.file:
+            return asyncio.run(control_panel.import_regions(args.file))
+        return asyncio.run(control_panel.import_regions_from_source())
     if args.command == "measure-wb":
         return asyncio.run(wb.run(args.region, args.sku))
     if args.command == "measure-ozon":
@@ -100,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         return panel.run(args.host, args.port)
     if args.command == "metrics":
         return asyncio.run(report.run(args.run_id, args.last))
+    if args.command == "export":
+        return asyncio.run(export.run(preview=args.preview))
 
     parser.error(f"unknown command: {args.command}")
     return 2

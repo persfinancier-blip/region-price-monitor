@@ -389,3 +389,34 @@
 - **Не делали в этом слайсе** (следующие): настраиваемые source/sink-адаптеры (CSV/Excel/БД) +
   маппинг полей — `prompt-13`; мастер настройки — `prompt-14`; хранилище секретов (снято для
   локального режима, SPEC §9.3); Postgres-путь не удалён, работает за тем же seam.
+
+## 2026-07-23 — I/O-адаптеры: source/sink CSV/Excel/DB + маппинг (`prompt-13-io-adapters`)
+
+- **I/O seam** (ADR-0010): `app/io/base.py` — `ProductSource`/`ResultSink` Protocol'ы,
+  канонический словарь SPEC-panel §7 как единственная развязка; `app/io/factory.py` —
+  `make_product_source(settings)`/`make_result_sink(settings)` по `kind`.
+- **Четыре адаптера**: `json` (сегодняшний локальный импорт без изменений, дефолт), `csv`
+  (`csv`-модуль), `xlsx` (**openpyxl**, новая зависимость; `path`/`sheet`/A1 `range`, локатор —
+  имя заголовка или буква колонки), `db` (SQLAlchemy поверх произвольной таблицы, импорт
+  ленивый — параллель `app/storage/postgres.py`, файловым бэкендам сеть не нужна).
+- **Маппинг как данные** (`app/io/mapping.py`): `{canonical_field: locator}` из
+  `config/io.json` (`settings.io_config_path`, опционален); `validate()` ловит отсутствующие
+  обязательные поля и локаторы вне заголовка источника (съехавший лист); `preview(n=5)` —
+  первые N замаппленных строк.
+- **Скрипты**: `control_panel.py import-products`/`import-regions` — `file` стал опциональным
+  позиционным аргументом (и в `cli.py`, и в собственном `main()`); без файла читают через
+  сконфигурированный источник (`import_products_from_source`/`import_regions_from_source`).
+  Новый `app/scripts/export.py` (`python -m app.scripts.export`, verb `export` в `cli.py`) —
+  строит канонические строки результата из `price_snapshots` (+ join `products`/`regions`
+  через storage seam) и пишет через сконфигурированный сток; `--preview` печатает первые
+  строки; без стока — чистый no-op с сообщением.
+- **Обратная совместимость подтверждена тестом**: `tests/test_io_json_backcompat.py`
+  воспроизводит сегодняшний `import-products`/`import-regions` файловый путь один в один;
+  существующие тесты `control_panel`/`cli` не менялись, кроме добавления новых кейсов.
+- **Тесты**: `test_io_mapping.py`, `test_io_csv.py`, `test_io_xlsx.py`,
+  `test_io_json_backcompat.py`, `test_io_factory.py` (без сети/БД), `test_io_db.py` (за гейтом
+  `TEST_DATABASE_URL`, пропускается без Postgres), плюс новые кейсы в
+  `test_scripts_control_panel.py`/`test_scripts_export.py`. DoD-гейт зелёный: 172 passed / 11
+  skipped (без Postgres в песочнице).
+- **Не делали в этом слайсе** (следующий): мастер настройки — `prompt-14`; UI вкладки
+  «Параметры подключения» (Фаза 8.4); финализация списка ценовых полей (SPEC §9.5).
