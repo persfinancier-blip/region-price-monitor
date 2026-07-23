@@ -56,6 +56,10 @@ class ProductRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, product_id: int) -> Product | None:
+        """Look up a single product by id."""
+        return await self._session.get(Product, product_id)
+
 
 class RegionRepository:
     """Repository for the `regions` reference table."""
@@ -94,6 +98,10 @@ class RegionRepository:
         result = await self._session.execute(select(Region).where(Region.code == code))
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, region_id: int) -> Region | None:
+        """Look up a single region by id."""
+        return await self._session.get(Region, region_id)
+
 
 class RunRepository:
     """Repository for the `runs` table."""
@@ -107,6 +115,10 @@ class RunRepository:
         self._session.add(run)
         await self._session.flush()
         return run
+
+    async def get(self, run_id: int) -> Run | None:
+        """Look up a single run by id."""
+        return await self._session.get(Run, run_id)
 
     async def finish(self, run: Run, status: RunStatus, stats: dict[str, Any]) -> Run:
         """Mark a run finished with the given status and stats."""
@@ -161,6 +173,16 @@ class MeasureQueueRepository:
     async def mark(self, item: MeasureQueueItem, status: QueueStatus) -> MeasureQueueItem:
         """Update a queue item's status."""
         item.status = status
+        await self._session.flush()
+        return item
+
+    async def get(self, item_id: int) -> MeasureQueueItem | None:
+        """Look up a single queue item by id."""
+        return await self._session.get(MeasureQueueItem, item_id)
+
+    async def increment_attempts(self, item: MeasureQueueItem) -> MeasureQueueItem:
+        """Increment a queue item's retry counter by one."""
+        item.attempts += 1
         await self._session.flush()
         return item
 

@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     schedule_cron: str = "0 */6 * * *"
     max_concurrency: int = 5
     retry_limit: int = 3
+    queue_claim_batch: int = 10
+    retry_backoff_base_s: float = 2.0
+    retry_backoff_max_s: float = 60.0
+    queue_lock_ttl_s: int = 600
 
     proxy_provider: str = "static"
     proxy_url: str | None = None
