@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     cookie_store_dir: str = "data/cookies"
     ozon_cookie_ttl_hours: int = 12
 
+    log_level: str = "INFO"
+    log_format: str = "json"
+
+    success_rate_threshold: float = 0.9
+    alert_min_measures: int = 1
+    alerter: str = "log"
+    alert_webhook_url: str | None = None
+
 
 def get_settings() -> Settings:
     """Return a fresh Settings instance (reads current environment)."""

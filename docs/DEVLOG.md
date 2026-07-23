@@ -94,3 +94,47 @@
 - Тесты: `tests/test_retry.py` (чистые, backoff монотонен и capped, `is_retriable` по всем исходам), `tests/test_queue.py` (DB: `enqueue`+`claim` заполняет и блокирует статус, **два конкурентных `claim()` в разных сессиях возвращают непересекающиеся наборы** — доказывает `SKIP LOCKED`, `complete` выставляет терминальный статус, `reclaim_stale` возвращает протухший `in_progress` в `pending`), `tests/test_runner.py` (DB: `run_once` со стаб-коллектором — `price_snapshot` на `OK`, ретраи ограничены `retry_limit`, по `attempts`-строке на попытку). Все DB-тесты чисто скипаются без `TEST_DATABASE_URL`/`DATABASE_URL` и проходят с локальным Postgres (проверено вживую: 61 passed на чистой БД).
 - Ручная проверка вживую: `run-once` с демо-товаром/регионом на локальном Postgres прошла полный цикл (run created → enqueue → worker pool → attempt/queue-item записаны → `run.status=done`); реальной сети/прокси в песочнице нет, поэтому запрос к WB вернул `error` (ожидаемо для фиктивного SKU/dest) — логика оркестрации подтверждена, не сетевой сценарий.
 - Итог: код Фазы 5 готов, DoD зелёный (ruff + mypy strict + pytest). Следующая веха — Фаза 6 (`prompt-07-resilience`).
+
+## 2026-07-23 — Наблюдаемость: метрики + структурные логи + алерт по доле успеха (`prompt-07-observability`)
+
+- `app/obs/logging.py`: stdlib-only `JsonFormatter` (level/logger/message/timestamp + `extra`-поля, без
+  `structlog`), `configure_logging(settings)` ставит форматтер на root-логгер (`json` | `text` по
+  `settings.log_format`); вызывается один раз в начале `app/cli.py::main`.
+- `app/collectors/measure.py::measure_pair`: одно структурное `measurement`-событие на попытку
+  (`run_id`, `marketplace`, `product_id`, `sku`, `region_code`, `proxy_ref` — маскированный,
+  `outcome`, `duration_ms`, `error`) — единственная точка per-attempt телеметрии; CLI и воркер-пул
+  получают её бесплатно, оба идут через `measure_pair`. Поведение/возврат `measure_pair` не изменены.
+- `app/obs/metrics.py`: `RunMetrics` (frozen dataclass), чистая `metrics_from_counts` (юнит-тестируема
+  без БД, guard на деление на ноль, `attempts_per_success = total/ok`, `ok==0 → total` как
+  худший случай), `compute_run_metrics(session, run_id)` — агрегирует `attempts` через join на
+  `measure_queue` (`func.count` по `outcome`, `func.coalesce(func.sum(duration_ms), 0)`),
+  `to_prometheus(metrics)` — Prometheus text-exposition строкой, без `prometheus_client`.
+- `app/obs/alerts.py`: `Alert` (frozen dataclass), `Alerter` (`Protocol`, зеркалит `ProxyProvider` из
+  ADR-0003), `LogAlerter` (структурный WARN, без конфига), `WebhookAlerter` (`requests.post` в
+  `asyncio.to_thread`, JSON-тело, сбой логируется и не роняет ран), чистая `should_alert(metrics,
+  threshold, min_measures)`, `make_alerter(settings)` — фабрика (`log` дефолт; `webhook` требует
+  `alert_webhook_url`, иначе явная ошибка).
+- `app/scheduler/runner.py::run_once`: `run.started` в начале, после `run_repo.finish` —
+  `compute_run_metrics(run_id)` в отдельной read-сессии, `run.finished` со всеми метриками,
+  `make_alerter(settings)` + `should_alert(...)` → `alerter.send(Alert(...))`; алертинг обёрнут в
+  `try/except` — сбой никогда не роняет и не откатывает ран. `RunSummary` расширен полем `metrics`.
+- `app/config.py` / `.env.example`: `log_level`, `log_format`, `success_rate_threshold` (0.9 по TZ),
+  `alert_min_measures`, `alerter`, `alert_webhook_url`.
+- CLI: `configure_logging(get_settings())` в начале `main`; новая команда `metrics --run <id> |
+  --last` — печатает человекочитаемую сводку, Prometheus text и одну структурную лог-строку.
+- Тесты: `tests/test_metrics.py` (чистая арифметика — все ветки, divide-by-zero guard, Prometheus
+  well-formed; DB-тест агрегации на смешанных `attempts`), `tests/test_alerts.py` (`should_alert` по
+  порогу/`min_measures`, `LogAlerter` через `caplog`, `WebhookAlerter` — payload/URL с
+  monkeypatched `requests.post`, без реальной сети, сбой не бросает исключение),
+  `tests/test_logging.py` (валидный JSON, ожидаемые ключи, отсутствие `Decimal`/цены и сырого
+  proxy URL в представительном `extra`), искусственный бан в `tests/test_runner.py`
+  (ретраи по `retry_limit` → `ban_rate > 0`/`attempts_per_success > 1`; алерт срабатывает ровно
+  один раз ниже порога и ноль раз на пороге/выше — через spy-`Alerter`). Все DB-тесты чисто
+  скипаются без `TEST_DATABASE_URL`/`DATABASE_URL`; вживую на локальном Postgres 16 — 83 passed.
+- Живая проверка: `run-once` на локальном Postgres — структурные JSON-логи (`measurement` на
+  попытку, `run.started`/`run.finished` с метриками, `alert` WARN при доле успеха 0 < 0.9);
+  `metrics --last` печатает сводку и корректный Prometheus text по тем же данным.
+- `docs/adr/0007-observability.md` фиксирует 4 решения (метрики из БД, нет live-эндпоинта,
+  `Alerter`-сиим, здоровье прокси/антибот — в `prompt-08`).
+- Итог: код первой половины Фазы 6 готов, DoD зелёный (ruff + mypy strict + pytest). Следующая
+  веха — вторая половина Фазы 6, `prompt-08` (здоровье прокси/cooldown + антибот-тюнинг).

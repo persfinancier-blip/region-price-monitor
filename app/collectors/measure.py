@@ -1,6 +1,7 @@
 """Shared per-pair measurement unit — used by the CLI and the worker pool alike."""
 
 import asyncio
+import logging
 import time
 
 import requests
@@ -17,6 +18,8 @@ from app.enums import Marketplace, Outcome
 from app.models import Product, Region
 from app.proxy.base import ProxyProvider
 from app.repositories import AttemptRepository, PriceSnapshotRepository
+
+logger = logging.getLogger(__name__)
 
 # Sentinel returned when an Ozon pair needs cookie warming and is skipped
 # without recording a fake attempt (the CLI's existing non-interactive rule).
@@ -99,5 +102,20 @@ async def measure_pair(
         queue_id=queue_id, proxy_ref=lease.ref, outcome=outcome, duration_ms=duration_ms, error=error
     )
     await provider.report(lease, outcome)
+
+    logger.info(
+        "measurement",
+        extra={
+            "run_id": run_id,
+            "marketplace": product.marketplace.value,
+            "product_id": product.id,
+            "sku": product.sku,
+            "region_code": region.code,
+            "proxy_ref": lease.ref,
+            "outcome": outcome.value,
+            "duration_ms": duration_ms,
+            "error": error,
+        },
+    )
 
     return outcome

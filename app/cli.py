@@ -3,7 +3,10 @@
 import argparse
 import asyncio
 import json
+import logging
 import sys
+
+from sqlalchemy import select
 
 from app.collectors.measure import measure_pair
 from app.collectors.ozon import OzonCollector
@@ -14,6 +17,9 @@ from app.cookies.warm import CookieWarmer, warm_if_stale
 from app.db import get_session
 from app.db import healthcheck as db_healthcheck
 from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
+from app.models import Run
+from app.obs.logging import configure_logging
+from app.obs.metrics import compute_run_metrics, to_prometheus
 from app.proxy.static import make_proxy_provider
 from app.repositories import (
     AttemptRepository,
@@ -281,6 +287,45 @@ async def _run_once() -> int:
     return 0
 
 
+async def _metrics(run_id: int | None, last: bool) -> int:
+    async with get_session() as session:
+        if last:
+            result = await session.execute(select(Run).order_by(Run.id.desc()).limit(1))
+            run = result.scalar_one_or_none()
+            if run is None:
+                print("no runs found", file=sys.stderr)
+                return 1
+            target_run_id = run.id
+        elif run_id is not None:
+            target_run_id = run_id
+        else:
+            print("either --run or --last is required", file=sys.stderr)
+            return 1
+
+        metrics = await compute_run_metrics(session, target_run_id)
+
+    print(
+        f"run {metrics.run_id}: total={metrics.total} "
+        f"success_rate={metrics.success_rate:.3f} ban_rate={metrics.ban_rate:.3f} "
+        f"error_rate={metrics.error_rate:.3f} avg_duration_ms={metrics.avg_duration_ms:.1f} "
+        f"attempts_per_success={metrics.attempts_per_success:.2f}"
+    )
+    print(to_prometheus(metrics), end="")
+    logging.getLogger(__name__).info(
+        "metrics",
+        extra={
+            "run_id": metrics.run_id,
+            "total": metrics.total,
+            "success_rate": metrics.success_rate,
+            "ban_rate": metrics.ban_rate,
+            "error_rate": metrics.error_rate,
+            "avg_duration_ms": metrics.avg_duration_ms,
+            "attempts_per_success": metrics.attempts_per_success,
+        },
+    )
+    return 0
+
+
 async def _serve() -> int:
     settings = get_settings()
     scheduler = Scheduler(get_session, settings)
@@ -342,7 +387,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers.add_parser("serve", help="Start the cron daemon (APScheduler) and block")
 
+    metrics_parser = subparsers.add_parser(
+        "metrics", help="Print a run's metrics (human summary + Prometheus text)"
+    )
+    metrics_group = metrics_parser.add_mutually_exclusive_group(required=True)
+    metrics_group.add_argument("--run", type=int, default=None, dest="run_id", help="Run id")
+    metrics_group.add_argument("--last", action="store_true", help="Most recent run")
+
     args = parser.parse_args(argv)
+
+    configure_logging(get_settings())
 
     if args.command == "healthcheck":
         return asyncio.run(_run_healthcheck())
@@ -360,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_once())
     if args.command == "serve":
         return asyncio.run(_serve())
+    if args.command == "metrics":
+        return asyncio.run(_metrics(args.run_id, args.last))
 
     parser.error(f"unknown command: {args.command}")
     return 2

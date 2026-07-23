@@ -12,10 +12,11 @@
 - [x] **Фаза 3 — Регионализация + ProxyProvider** (`prompt-04-regions-proxy`) — DoD-гейт зелёный; `ProxyProvider` + `StaticProxyProvider` (провайдер-агностично), классификатор исходов, `measure-wb` пишет `measure_queue`+`attempts` по всем активным регионам. Живая проверка с реальным `proxy_map_json` (регион-разные цены) не выполнена в песочнице — нужна ручная проверка владельцем.
 - [x] **Фаза 4 — Коллектор Ozon** (`prompt-05-ozon-collector`) — DoD-гейт зелёный; `OzonCollector` (`curl_cffi` + `impersonate="chrome"` + прогретые куки), `FsCookieStore` + `CookieWarmer` (Playwright, `MANUAL=1`), гибридная модель регион-по-куке/прокси-по-желанию (ADR-0005), `measure-ozon`/`warm-ozon`. Живая проверка (два города, разные `cardPrice` по кукам) не выполнена в песочнице — нужна ручная проверка владельцем.
 - [x] **Фаза 5 — Оркестрация и расписание** (`prompt-06-orchestration`) — DoD-гейт зелёный (61 passed вживую на Postgres); `TaskQueue`/`PgTaskQueue` (`SKIP LOCKED`, конкурентный `claim` проверен тестом), общий `measure_pair`, ретраи с backoff, worker pool, `Scheduler`(APScheduler) + `run-once`/`serve`. Живая проверка `run-once` на локальном Postgres прошла полный цикл; сетевой сценарий (реальные WB/Ozon через прокси) не выполнен в песочнице — нужна ручная проверка владельцем.
+- [x] **Фаза 6, часть 1 — Наблюдаемость** (`prompt-07-observability`) — DoD-гейт зелёный (83 passed вживую на Postgres); структурные JSON-логи (`app/obs/logging.py`, per-attempt `measurement` + `run.started`/`run.finished`), метрики из `runs`/`attempts` без новой схемы (`app/obs/metrics.py`, `metrics` CLI — человекочитаемо + Prometheus text), `Alerter`-сиим (`app/obs/alerts.py` — `LogAlerter`/`WebhookAlerter`, порог доли успеха ≥0.9 по TZ). Живая проверка на локальном Postgres пройдена (структурные логи + алерт при доле успеха 0 < 0.9 подтверждены). ADR-0007.
 
 ## Потом
 
-- [ ] Фаза 6 — Устойчивость и наблюдаемость (`prompt-07-resilience`)
+- [ ] Фаза 6, часть 2 — Здоровье прокси/cooldown + антибот-тюнинг (`prompt-08-proxy-health`)
 - [ ] Фаза 7 — Упаковка и деплой + **zip-автоустановщик** под Windows/Linux (`prompt-ops-01-deploy`) — ADR-0006.
 - [ ] **Фаза 8 — Панель управления** (FastAPI, стиль «Вектор·OS»): дашборд, города (наследование+переопределение), куки, маппинг, редактор скриптов, логи — SPEC-panel, ADR-0006.
 
