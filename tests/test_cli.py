@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 from app import cli
-from app.scripts import control_panel, health, orchestrator, ozon, parameters, report, wb
+from app.scripts import control_panel, health, orchestrator, ozon, panel, parameters, report, wb
 
 
 def _patched(module, name):
@@ -94,6 +94,14 @@ def test_metrics_delegates_to_report() -> None:
 
     assert result == 0
     mock_fn.assert_called_once_with(None, True)
+
+
+def test_panel_delegates_to_panel_script() -> None:
+    with patch.object(panel, "run", return_value=0) as mock_fn:
+        result = cli.main(["panel", "--host", "0.0.0.0", "--port", "9000"])
+
+    assert result == 0
+    mock_fn.assert_called_once_with("0.0.0.0", 9000)
 
 
 def test_cli_module_holds_no_business_logic() -> None:

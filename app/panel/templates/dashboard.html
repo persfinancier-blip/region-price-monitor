@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Здоровье проекта</h1>
+  {% if is_running %}
+    <p class="status status--running">Прогон выполняется</p>
+  {% else %}
+    <p class="status status--idle">Простаивает</p>
+  {% endif %}
+  {% if last_run %}
+    <p>Последний запуск: {{ last_run.started_at }} — статус: {{ last_run.status.value }}</p>
+    {% if last_metrics %}
+      <p>Доля успеха: {{ "%.1f"|format(last_metrics.success_rate * 100) }}%
+        ({{ last_metrics.total }} попыток)</p>
+    {% endif %}
+  {% else %}
+    <p class="muted">Запусков ещё не было.</p>
+  {% endif %}
+  <form id="run-form" method="post" action="/run">
+    <button type="submit" id="run-button" {% if is_running %}disabled{% endif %}>Запустить сейчас</button>
+  </form>
+  <div id="run-status"></div>
+</section>
+
+<section class="card">
+  <h2>Последние запуски</h2>
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Режим</th><th>Начат</th><th>Завершён</th><th>Статус</th><th>Итоги</th></tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>{{ run.id }}</td>
+        <td>{{ run.mode.value }}</td>
+        <td>{{ run.started_at }}</td>
+        <td>{{ run.finished_at or "—" }}</td>
+        <td>{{ run.status.value }}</td>
+        <td>
+          {% set m = run_metrics.get(run.id) %}
+          {% if m %}
+            {% for outcome, count in m.by_outcome.items() %}{{ outcome }}={{ count }} {% endfor %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="muted">Нет данных</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Последние цены</h2>
+  <table>
+    <thead>
+      <tr><th>Товар</th><th>Площадка</th><th>Регион</th><th>Цена</th><th>Без скидки</th>
+        <th>По карте</th><th>Наличие</th><th>Замерено</th></tr>
+    </thead>
+    <tbody>
+      {% for s in snapshots %}
+      <tr>
+        <td>{{ s.product_name }}</td>
+        <td>{{ s.marketplace }}</td>
+        <td>{{ s.region_code }}</td>
+        <td>{{ s.price }}</td>
+        <td>{{ s.price_base }}</td>
+        <td>{{ s.price_card or "—" }}</td>
+        <td>{{ "да" if s.is_available else "нет" }}</td>
+        <td>{{ s.captured_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">Нет данных</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Активные города</h2>
+  <table>
+    <thead>
+      <tr><th>Регион</th><th>Прокси</th><th>Площадки</th></tr>
+    </thead>
+    <tbody>
+      {% for city in cities %}
+      <tr>
+        <td>{{ city.region.code }}</td>
+        <td>{{ "***" if city.proxy_ref else "—" }}</td>
+        <td>{{ city.marketplaces|map(attribute="value")|join(", ") or "—" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">Нет данных</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -120,6 +120,11 @@ class RunRepository:
         """Look up a single run by id."""
         return await self._session.get(Run, run_id)
 
+    async def list_recent(self, limit: int = 10) -> list[Run]:
+        """Return the last `limit` runs, most recent first."""
+        result = await self._session.execute(select(Run).order_by(Run.id.desc()).limit(limit))
+        return list(result.scalars().all())
+
     async def finish(self, run: Run, status: RunStatus, stats: dict[str, Any]) -> Run:
         """Mark a run finished with the given status and stats."""
         run.status = status
