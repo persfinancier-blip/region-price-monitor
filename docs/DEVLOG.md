@@ -177,3 +177,54 @@
 - ROADMAP/prompts-README/BACKLOG приведены в соответствие с разбивкой Фазы 6 на 6.1/6.2.
 - Итог: Фаза 6 закрыта целиком. TZ-требование «устойчивость к антиботу» (остывание банов,
   человекоподобный темп, консистентный fingerprint) удовлетворено для MVP.
+
+## 2026-07-23 — Фаза 7, часть 1 — Deploy core (`prompt-ops-01-deploy`)
+
+- **Playwright-база переведена на `v1.47.0-noble`** (было `v1.44.0-jammy`): `jammy`-теги
+  Playwright-образа несут Python 3.10, а `pyproject.toml` требует `>=3.12` — прод-сборка
+  падала на `pip install .` («requires a different Python»), баг не был замечен раньше,
+  т.к. `docker compose build` вживую не гонялся. `noble`-теги несут Python 3.12.3; `1.47.0`
+  — самый ранний доступный `-noble` тег, совместим с `playwright>=1.44` из `pyproject.toml`.
+- **Прод-`Dockerfile`**: сохранена Playwright-база (нужна для прогрева кук Ozon, ADR-0005);
+  `pip install --no-cache-dir .` (без `-e`, без dev-экстры); `docker/entrypoint.sh`
+  (`alembic upgrade head` → `exec region-price-monitor "$@"`) — миграции всегда применяются
+  перед стартом любой команды; непривилегированный пользователь `app` (uid 1000), владеет
+  `/srv/app` (включая `data/cookies`); `CMD ["serve"]` по умолчанию, любая другая команда CLI
+  (`run-once`/`metrics`/`warm-ozon`/`healthcheck`/`import-*`) подставляется через
+  `docker compose run app <команда>`.
+- **`docker-compose.prod.yml`**: `postgres:16` с именованным volume `pgdata` и healthcheck;
+  `app` (`build: .`, `env_file: .env`, `command: ["serve"]`, `restart: unless-stopped`,
+  `depends_on: postgres healthy`) с именованным volume `cookies` на `COOKIE_STORE_DIR`
+  (`/srv/app/data/cookies`) — прогретые куки Ozon переживают рестарт. Postgres **не
+  публикуется наружу** (нет `ports:`). Дев-`docker-compose.yml` не тронут.
+- **`Makefile`** — тонкие targets (`build`/`up`/`down`/`migrate`/`run-once`/`warm-ozon`/
+  `metrics`/`logs`), только обёртка над `docker compose -f docker-compose.prod.yml`, без
+  логики.
+- **`docs/OPS.md`** (RU) — раннбук: клон → `.env` (в т.ч. `DATABASE_URL` хост `postgres` для
+  прод-compose, `POSTGRES_USER/PASSWORD/DB`) → `build`/`up` → миграции (авто через entrypoint)
+  → импорт справочников → смоук `run-once`/`metrics` без реального маркетплейса → ручной
+  прогрев кук Ozon (`MANUAL=1 ... warm-ozon`, headful-шаг, ADR-0006 открытый вопрос) → боевой
+  `serve` → чтение логов/метрик → volumes (`pgdata`/`cookies`) → обновление (`pull` → `build`
+  → миграции на entrypoint). Явный copy-paste чеклист «боевой прогон».
+- **`.env.example`**: добавлены `POSTGRES_USER/PASSWORD/DB`, `DATABASE_URL` переведён на хост
+  `postgres` (прод-ориентированный дефолт), пояснение к `COOKIE_STORE_DIR` про volume.
+- **`docs/adr/0008-script-shell-separation.md`** — зафиксировано решение владельца (только
+  документация, без реализации): разложить исполняемую логику на самостоятельные Python-
+  скрипты (control-panel, parameters, health, wb/ozon, orchestrator), оболочка (панель/CLI)
+  — только I/O и управление; редактор скриптов панели (Фаза 8) получит пайплайн-конструктор
+  в духе GitHub Actions. Статус: принято, не реализовано.
+- **Не делали в этом слайсе** (см. BACKLOG «Потом»): zip-автоустановщик (ADR-0006), финальный
+  выбор хостинга (открытый вопрос остаётся), реструктуризация `app/*` под ADR-0008.
+- `docker/entrypoint.sh` переведён на `#!/bin/bash` (`set -o pipefail` не поддерживается
+  `sh` в этом образе — падал на первом же запуске).
+- DoD-гейт зелёный (Python-логика не менялась — ruff/mypy/pytest без изменений в `app`).
+  **Живая проверка в песочнице (Docker доступен):** `docker compose -f docker-compose.prod.yml
+  build` — зелёный; `healthcheck`/`run-once`/`metrics` вызваны как команда контейнера —
+  entrypoint применяет `alembic upgrade head` и exec'ает команду; `import-regions`/
+  `import-products` на демо-справочниках (`data/seed/*.json`) — идемпотентны; `run-once`
+  прошёл полный цикл (6 попыток, `error_rate=1.0` — демо-SKU не существуют на реальном WB,
+  ожидаемо для смоука без реального маркетплейса); `metrics --last` печатает сводку и
+  Prometheus-текст; контейнер `app` работает под непривилегированным `uid=1002(app)`; volumes
+  `pgdata`/`cookies` создаются и удаляются вместе с `down -v`. Полный «боевой» прогон против
+  реальных WB/Ozon + реальных региональных прокси — по-прежнему задача владельца (нет доступа
+  к реальным прокси/сети маркетплейсов в песочнице).
