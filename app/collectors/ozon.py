@@ -11,6 +11,7 @@ from typing import Any, cast
 from curl_cffi import requests as curl_requests
 
 from app.collectors.base import PriceObservation
+from app.collectors.fingerprint import ozon_impersonate
 from app.collectors.ozon_parse import OzonParseError, parse_ozon
 from app.config import get_settings
 from app.cookies.base import CookieStore, is_stale
@@ -56,7 +57,7 @@ class OzonCollector:
         response = curl_requests.get(
             settings.ozon_api_url,
             params={"url": f"/product/{product.sku}/"},
-            impersonate=cast(Any, settings.ozon_impersonate),
+            impersonate=cast(Any, ozon_impersonate(region, settings)),
             cookies=cookies,
             proxies=cast(Any, proxy_url_to_requests_dict(proxy_url)),
             timeout=settings.http_timeout_s,

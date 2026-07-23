@@ -3,24 +3,12 @@
 import requests
 
 from app.collectors.base import PriceObservation
+from app.collectors.fingerprint import wb_headers
 from app.collectors.wb_parse import parse_wb_card
 from app.config import get_settings
 from app.enums import Marketplace
 from app.models import Product, Region
 from app.proxy.base import proxy_url_to_requests_dict
-
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
-_HEADERS = {
-    "User-Agent": _USER_AGENT,
-    "Accept": "*/*",
-    "Accept-Language": "ru-RU",
-    "Accept-Encoding": "gzip, deflate",  # no brotli — requests won't decode it
-    "Origin": "https://www.wildberries.ru",
-    "Referer": "https://www.wildberries.ru/",
-}
 
 
 class WbCollectionError(ValueError):
@@ -50,7 +38,7 @@ class WbCollector:
         response = requests.get(
             settings.wb_card_url,
             params=params,
-            headers=_HEADERS,
+            headers=wb_headers(region),
             timeout=settings.http_timeout_s,
             proxies=proxy_url_to_requests_dict(proxy_url),
         )

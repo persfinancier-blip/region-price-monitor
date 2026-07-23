@@ -10,6 +10,7 @@ class _Settings:
         self.proxy_provider = proxy_provider
         self.proxy_url = proxy_url
         self.proxy_map_json = proxy_map_json
+        self.proxy_health_enabled = True
 
 
 async def test_acquire_region_in_map_returns_its_proxy_url() -> None:

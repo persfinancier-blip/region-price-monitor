@@ -10,6 +10,7 @@ from curl_cffi.requests.exceptions import RequestException as CurlRequestExcepti
 from app.collectors.base import PriceObservation
 from app.collectors.outcome import classify_outcome
 from app.collectors.ozon import OzonCollectionError, OzonCollector, OzonCookiesUnavailable
+from app.collectors.pacing import NullRateLimiter, RatePacer
 from app.collectors.wb import WbCollectionError, WbCollector
 from app.config import Settings
 from app.cookies.base import CookieStore
@@ -17,6 +18,7 @@ from app.cookies.base import is_stale as cookie_is_stale
 from app.enums import Marketplace, Outcome
 from app.models import Product, Region
 from app.proxy.base import ProxyProvider
+from app.proxy.health import ProxyOnCooldown
 from app.repositories import AttemptRepository, PriceSnapshotRepository
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Sentinel returned when an Ozon pair needs cookie warming and is skipped
 # without recording a fake attempt (the CLI's existing non-interactive rule).
 NEEDS_WARM = None
+
+_NULL_PACER = NullRateLimiter()
 
 
 async def measure_pair(
@@ -40,6 +44,7 @@ async def measure_pair(
     queue_id: int,
     snapshot_repo: PriceSnapshotRepository,
     attempt_repo: AttemptRepository,
+    pacer: RatePacer = _NULL_PACER,
 ) -> Outcome | None:
     """Run one (product, region) measurement attempt and return its Outcome.
 
@@ -55,7 +60,20 @@ async def measure_pair(
         if bundle is None or cookie_is_stale(bundle, settings.ozon_cookie_ttl_hours):
             return NEEDS_WARM
 
-    lease = await provider.acquire(region.code)
+    await pacer.wait(product.marketplace)
+
+    try:
+        lease = await provider.acquire(region.code)
+    except ProxyOnCooldown as exc:
+        logger.info(
+            "proxy.cooldown",
+            extra={
+                "region_code": region.code,
+                "proxy_ref": exc.proxy_ref,
+                "until": exc.until,
+            },
+        )
+        return NEEDS_WARM
 
     started = time.monotonic()
     status_code: int | None = None
