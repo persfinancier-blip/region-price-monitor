@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from app.config import Settings, get_settings
 from app.enums import RunMode
-from app.scheduler.runner import RunSummary, SessionFactory, run_once
+from app.scheduler.runner import RunSummary, Scheduler, SessionFactory, run_once
 from app.scripts import control_panel, health, parameters
 
 
@@ -116,12 +116,44 @@ async def run(
     return summary_holder["summary"]
 
 
+async def serve(*, session_factory: SessionFactory | None = None, settings: Settings | None = None) -> int:
+    """Start the cron daemon: schedule `run(mode=RunMode.SCHEDULED)` on `settings.schedule_cron`, block."""
+    resolved_settings = settings or get_settings()
+    resolved_factory = session_factory or parameters.run().session_factory
+
+    async def _job() -> RunSummary:
+        return await run(
+            mode=RunMode.SCHEDULED,
+            interactive=False,
+            session_factory=resolved_factory,
+            settings=resolved_settings,
+        )
+
+    scheduler = Scheduler(resolved_factory, resolved_settings, job=_job)
+    scheduler.start()
+    print(f"scheduler running, cron={resolved_settings.schedule_cron} (Ctrl-C to stop)")
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        scheduler.shutdown()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Standalone entrypoint: run one full pipeline pass, same output shape as `run-once`."""
+    """Standalone entrypoint: bare invocation runs one pipeline pass (same output as `run-once`);
+    `serve` starts the cron daemon and blocks."""
     parser = argparse.ArgumentParser(
         prog="app.scripts.orchestrator", description="Run the full measurement pipeline once"
     )
-    parser.parse_args(argv)
+    subparsers = parser.add_subparsers(dest="action")
+    subparsers.add_parser("serve", help="Start the cron daemon (APScheduler) and block")
+    args = parser.parse_args(argv)
+
+    if args.action == "serve":
+        return asyncio.run(serve())
 
     summary = asyncio.run(run(mode=RunMode.MANUAL, interactive=sys.stdin.isatty()))
     print(f"run {summary.run_id}: " + ", ".join(f"{k}={v}" for k, v in sorted(summary.stats.items())))

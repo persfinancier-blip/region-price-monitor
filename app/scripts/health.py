@@ -9,6 +9,7 @@ triggers warming.
 
 import argparse
 import asyncio
+import sys
 from dataclasses import dataclass, field
 
 from app.config import Settings, get_settings
@@ -17,7 +18,9 @@ from app.cookies.fs import make_cookie_store
 from app.cookies.warm import CookieWarmer, warm_if_stale
 from app.enums import Marketplace
 from app.models import Region
+from app.proxy.base import ProxyProvider
 from app.proxy.health import ProxyHealthService
+from app.proxy.static import make_proxy_provider
 from app.repositories import RegionRepository
 from app.scheduler.runner import SessionFactory
 
@@ -114,6 +117,46 @@ async def run(
     return HealthReport(regions=reports)
 
 
+async def warm(
+    region_codes: list[str] | None,
+    *,
+    session_factory: SessionFactory | None = None,
+    settings: Settings | None = None,
+    cookie_store: CookieStore | None = None,
+    provider: ProxyProvider | None = None,
+    warmer: CookieWarmer | None = None,
+) -> int:
+    """Warm Ozon cookies for the given regions (default: all active with an Ozon geo entry)."""
+    from app.db import get_session
+
+    settings = settings or get_settings()
+    session_factory = session_factory or get_session
+    store = cookie_store or make_cookie_store(settings)
+    warmer = warmer or CookieWarmer()
+    provider = provider or make_proxy_provider(settings)
+
+    async with session_factory() as session:
+        region_repo = RegionRepository(session)
+        if region_codes:
+            regions = []
+            for code in region_codes:
+                region = await region_repo.get_by_code(code)
+                if region is None:
+                    print(f"unknown region: {code}", file=sys.stderr)
+                    return 1
+                regions.append(region)
+        else:
+            regions = [r for r in await region_repo.list_active() if "ozon" in r.geo]
+
+    for region in regions:
+        lease = await provider.acquire(region.code)
+        warm_if_stale(
+            store, warmer, Marketplace.OZON, region, settings.ozon_cookie_ttl_hours, lease.proxy_url
+        )
+        print(f"  region={region.code}: warmed")
+    return 0
+
+
 def format_report(report: HealthReport) -> str:
     """Render the health report as human-readable text."""
     lines = [f"healthy: {report.healthy}"]
@@ -126,12 +169,24 @@ def format_report(report: HealthReport) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Standalone entrypoint: print the health report; `--fix` warms stale cookies."""
+    """Standalone entrypoint: default prints the health report (`--fix` warms stale cookies);
+    `warm [--region ...]` warms Ozon cookies for one or all regions."""
     parser = argparse.ArgumentParser(
         prog="app.scripts.health", description="Report proxy/cookie health; optionally warm stale cookies"
     )
     parser.add_argument("--fix", action="store_true", help="Warm stale Ozon cookies")
+    subparsers = parser.add_subparsers(dest="action")
+    warm_parser = subparsers.add_parser("warm", help="Warm Ozon cookies for one or all regions")
+    warm_parser.add_argument(
+        "--region",
+        action="append",
+        default=None,
+        help="Region code; repeatable (default: all active regions with an Ozon geo entry)",
+    )
     args = parser.parse_args(argv)
+
+    if args.action == "warm":
+        return asyncio.run(warm(args.region))
 
     report = asyncio.run(run(fix=args.fix))
     print(format_report(report))

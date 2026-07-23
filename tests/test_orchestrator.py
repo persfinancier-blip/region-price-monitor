@@ -17,6 +17,7 @@ from app.config import Settings
 from app.db import make_engine
 from app.enums import Marketplace, RunMode
 from app.repositories import ProductRepository, RegionRepository
+from app.scheduler.runner import Scheduler
 from app.scripts.orchestrator import Pipeline, Step
 
 
@@ -73,6 +74,48 @@ async def test_pipeline_raises_on_unknown_dependency() -> None:
 
     with pytest.raises(ValueError, match="unknown step"):
         pipeline.order()
+
+
+async def test_serve_schedules_orchestrator_run_and_blocks_until_interrupt() -> None:
+    """`serve` wires a Scheduler whose job is `orchestrator.run`, no real blocking/sleep."""
+    import asyncio
+
+    from app.scripts import orchestrator
+
+    settings = Settings()
+    started: list[bool] = []
+    shut_down: list[bool] = []
+
+    def _fake_start(self) -> None:
+        started.append(True)
+
+    def _fake_shutdown(self) -> None:
+        shut_down.append(True)
+
+    async def _raise_cancelled(_seconds: float) -> None:
+        raise asyncio.CancelledError
+
+    captured_scheduler: list[Scheduler] = []
+
+    real_init = Scheduler.__init__
+
+    def _capture_init(self, session_factory, settings, *, job=None) -> None:
+        real_init(self, session_factory, settings, job=job)
+        captured_scheduler.append(self)
+
+    with (
+        patch.object(Scheduler, "__init__", _capture_init),
+        patch.object(Scheduler, "start", _fake_start, autospec=False),
+        patch.object(Scheduler, "shutdown", _fake_shutdown, autospec=False),
+        patch("asyncio.sleep", _raise_cancelled),
+    ):
+        result = await orchestrator.serve(session_factory=lambda: None, settings=settings)
+
+    assert result == 0
+    assert started == [True]
+    assert shut_down == [True]
+    assert len(captured_scheduler) == 1
+    assert captured_scheduler[0]._job_fn is not None
 
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")

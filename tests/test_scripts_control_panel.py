@@ -1,5 +1,6 @@
 """app.scripts.control_panel — unit tests over stubbed repositories, no DB."""
 
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
@@ -26,6 +27,16 @@ class _FakeRegion:
 @asynccontextmanager
 async def _fake_session():
     yield object()
+
+
+class _FakeCommittableSession:
+    async def commit(self) -> None:
+        pass
+
+
+@asynccontextmanager
+async def _fake_committable_session():
+    yield _FakeCommittableSession()
 
 
 async def test_run_mirrors_active_pairs_semantics() -> None:
@@ -87,3 +98,101 @@ def test_main_help_smoke() -> None:
     with pytest.raises(SystemExit) as exc_info:
         control_panel.main(["--help"])
     assert exc_info.value.code == 0
+
+
+async def test_import_products_reports_imported_and_updated(tmp_path, capsys) -> None:
+    existing = _FakeProduct(1, Marketplace.WB, "existing-sku")
+
+    async def list_active_products(self):
+        return [existing]
+
+    upserted = []
+
+    async def upsert(self, *, marketplace, sku, url, name):
+        upserted.append((marketplace, sku))
+        return _FakeProduct(len(upserted), marketplace, sku)
+
+    path = tmp_path / "products.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"marketplace": "wb", "sku": "existing-sku", "url": "https://x/1", "name": "A"},
+                {"marketplace": "wb", "sku": "new-sku", "url": "https://x/2", "name": "B"},
+            ]
+        )
+    )
+
+    with (
+        patch.object(ProductRepository, "list_active", list_active_products, autospec=False),
+        patch.object(ProductRepository, "upsert", upsert, autospec=False),
+    ):
+        result = await control_panel.import_products(str(path), session_factory=_fake_committable_session)
+
+    assert result == 0
+    assert upserted == [(Marketplace.WB, "existing-sku"), (Marketplace.WB, "new-sku")]
+    assert "imported 1 / updated 1" in capsys.readouterr().out
+
+
+async def test_import_regions_reports_imported_and_updated(tmp_path, capsys) -> None:
+    existing = _FakeRegion(1, "msk", geo={})
+
+    async def list_active_regions(self):
+        return [existing]
+
+    upserted = []
+
+    async def upsert(self, *, code, name, geo):
+        upserted.append(code)
+        return _FakeRegion(len(upserted), code, geo)
+
+    path = tmp_path / "regions.json"
+    path.write_text(
+        json.dumps(
+            [
+                {"code": "msk", "name": "Moscow", "geo": {}},
+                {"code": "spb", "name": "SPB", "geo": {}},
+            ]
+        )
+    )
+
+    with (
+        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(RegionRepository, "upsert", upsert, autospec=False),
+    ):
+        result = await control_panel.import_regions(str(path), session_factory=_fake_committable_session)
+
+    assert result == 0
+    assert upserted == ["msk", "spb"]
+    assert "imported 1 / updated 1" in capsys.readouterr().out
+
+
+def test_main_dispatches_import_products(tmp_path) -> None:
+    path = tmp_path / "products.json"
+    path.write_text("[]")
+
+    with patch.object(control_panel, "import_products") as mock_import:
+
+        async def _noop(*args, **kwargs):
+            return 0
+
+        mock_import.side_effect = _noop
+        result = control_panel.main(["import-products", str(path)])
+
+    assert result == 0
+    mock_import.assert_called_once_with(str(path))
+
+
+def test_main_dispatches_import_regions(tmp_path) -> None:
+    path = tmp_path / "regions.json"
+    path.write_text("[]")
+
+    with patch.object(control_panel, "import_regions") as mock_import:
+
+        async def _noop(*args, **kwargs):
+            return 0
+
+        mock_import.side_effect = _noop
+        result = control_panel.main(["import-regions", str(path)])
+
+    assert result == 0
+    mock_import.assert_called_once_with(str(path))

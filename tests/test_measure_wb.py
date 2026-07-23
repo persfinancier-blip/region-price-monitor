@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from app.db import make_engine
 from app.enums import Marketplace, Outcome
 from app.models import Attempt, MeasureQueueItem
 from app.repositories import ProductRepository, RegionRepository
+from app.scripts import wb as wb_script
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -51,8 +53,6 @@ async def session() -> AsyncIterator[AsyncSession]:
 
 
 async def test_measure_wb_writes_queue_and_attempt_and_snapshot_on_ok(session: AsyncSession) -> None:
-    from app import cli
-
     product_repo = ProductRepository(session)
     region_repo = RegionRepository(session)
 
@@ -72,14 +72,12 @@ async def test_measure_wb_writes_queue_and_attempt_and_snapshot_on_ok(session: A
         is_available=True,
     )
 
-    with (
-        patch("app.cli.get_session") as mock_get_session,
-        patch("app.cli.WbCollector.collect", return_value=obs),
-    ):
-        mock_get_session.return_value.__aenter__.return_value = session
-        mock_get_session.return_value.__aexit__.return_value = False
+    @asynccontextmanager
+    async def _fake_session():
+        yield session
 
-        result = await cli._measure_wb([region.code], product.sku)
+    with patch("app.scripts.wb.WbCollector.collect", return_value=obs):
+        result = await wb_script.run([region.code], product.sku, session_factory=_fake_session)
 
     assert result == 0
 

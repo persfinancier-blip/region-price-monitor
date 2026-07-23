@@ -270,3 +270,42 @@
   Фазе 8.
 - **Не делали в этом слайсе**: YAML/JSON-формат пайплайна, панель/FastAPI/UI (Фаза 8);
   изменение схемы БД, новых enum-значений, новых зависимостей.
+
+## 2026-07-23 — Дочистка тонкой оболочки (`prompt-10-thin-shell-complete`, ADR-0008)
+
+- **Завершили разделение из prompt-09**: последняя бизнес-логика, остававшаяся в `app/cli.py`,
+  перенесена в скрипты. `import_products`/`import_regions` — теперь функции
+  `app/scripts/control_panel.py` (+ подкоманды `import-products <file>`/`import-regions <file>`,
+  дефолт — прежний `show`). `_warm_ozon` — теперь `health.warm(region_codes, …)` (+ подкоманда
+  `warm [--region …]`). `_metrics` — новый скрипт `app/scripts/report.py` (назван так, чтобы не
+  конфликтовать с `app/obs/metrics.py`); `--run`/`--last` резолвятся как раньше. `_run_healthcheck`
+  — `parameters.healthcheck()` (+ `--check`). `_serve` — `orchestrator.serve(...)` (+ подкоманда
+  `serve`); `app/scheduler/runner.py::Scheduler` расширен опциональным `job`-колбэком (по
+  умолчанию — прежний `run_once`), так что `serve` планирует именно `orchestrator.run` — разовый
+  и плановый прогон идут по одному и тому же пайплайну.
+- **`app/cli.py` стал чистым диспетчером**: импортирует только argparse/asyncio,
+  `configure_logging` и `app.scripts.*`; каждая подкоманда — однострочная делегация. Grep на
+  `Repository`/`make_proxy_provider`/`get_session`/`measure_pair` в `cli.py` не находит ничего
+  (закреплено тестом `test_cli_module_holds_no_business_logic`).
+  Команды/флаги/вывод/коды выхода не изменились — `docker-compose.prod.yml`/`Makefile`/
+  entrypoint работают без правок.
+- **`tests/test_measure_wb.py`** — цель патчей сменилась с удалённых `app.cli.get_session`/
+  `app.cli._measure_wb` на `app.scripts.wb.WbCollector.collect`/`wb_script.run(...,
+  session_factory=...)`; ассерты не менялись.
+- Новые/расширенные тесты (ассерты старых тестов не менялись): `test_scripts_control_panel.py`
+  (`import_products`/`import_regions` + подкоманды), `test_scripts_health.py` (`warm(...)` по
+  умолчанию и по `--region`, неизвестный регион → exit 1), `test_scripts_report.py` (новый —
+  argv-смоук + БД-тест `--run`/`--last`/нет прогонов), `test_scripts_parameters.py`
+  (`healthcheck()` + `--check`), `test_orchestrator.py` (чистый тест: `serve` планирует Scheduler
+  с job'ом `orchestrator.run`, без реального sleep/блокировки), `tests/test_cli.py` (новый —
+  каждая подкоманда `cli.main([...])` делегирует в соответствующий скрипт; `configure_logging`
+  вызывается один раз).
+- **В песочнице без `DATABASE_URL` — 105 passed, 10 skipped** (DB-гейтед тесты, ожидаемо).
+  DoD-гейт (`ruff check`/`ruff format --check`/`mypy app`/`pytest`) зелёный.
+- **`docs/adr/0008-script-shell-separation.md`** — статус обновлён на «реализовано (структурная
+  часть) — вся исполнительская логика в `app/scripts/`, `cli.py` — чистый диспетчер»; pipeline
+  YAML/JSON-формат и редактор панели остаются Фазе 8.
+- **`docs/ARCHITECTURE.md`** §«Скрипты и оболочка» — добавлена таблица команда↔скрипт +
+  standalone-инвокация для каждой команды; явно указано, что оболочка — необязательное удобство.
+- **Не делали в этом слайсе**: YAML/JSON-формат пайплайна, панель/FastAPI/UI (Фаза 8); изменение
+  схемы БД, новых enum-значений, новых зависимостей.

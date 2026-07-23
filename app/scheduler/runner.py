@@ -250,15 +250,30 @@ async def run_once(
 
 
 class Scheduler:
-    """Wraps an APScheduler `AsyncIOScheduler` that fires `run_once` on `settings.schedule_cron`."""
+    """Wraps an APScheduler `AsyncIOScheduler` that fires a job on `settings.schedule_cron`.
 
-    def __init__(self, session_factory: SessionFactory, settings: Settings) -> None:
+    Defaults to `run_once` for the job; pass `job` to fire a different pipeline
+    callable instead (e.g. `app.scripts.orchestrator.run`), without duplicating
+    the APScheduler wiring.
+    """
+
+    def __init__(
+        self,
+        session_factory: SessionFactory,
+        settings: Settings,
+        *,
+        job: Callable[[], Awaitable[RunSummary]] | None = None,
+    ) -> None:
         self._session_factory = session_factory
         self._settings = settings
         self._scheduler = AsyncIOScheduler()
+        self._job_fn = job or self._default_job
+
+    def _default_job(self) -> Awaitable[RunSummary]:
+        return run_once(self._session_factory, self._settings, mode=RunMode.SCHEDULED, interactive=False)
 
     def _job(self) -> Awaitable[RunSummary]:
-        return run_once(self._session_factory, self._settings, mode=RunMode.SCHEDULED, interactive=False)
+        return self._job_fn()
 
     def start(self) -> None:
         """Register the cron job and start the scheduler."""
