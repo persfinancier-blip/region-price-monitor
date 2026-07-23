@@ -122,6 +122,12 @@ class TaskQueue(Protocol):
   конструктором такого пайплайна. Подкоманда `serve` запускает cron-демон (APScheduler),
   планирующий `orchestrator.run(mode=RunMode.SCHEDULED)` — тот же пайплайн, что и разовый
   прогон; без подкоманды — один проход пайплайна (эквивалент `run-once`).
+- **`panel`** — поднимает локальную веб-панель (uvicorn + `app.panel.create_app`, Фаза 8.1,
+  [SPEC-panel.md](SPEC-panel.md)). Панель — **ещё одна оболочка** над скриптами (как и
+  `app/cli.py`): `app/panel/` не содержит бизнес-логики, только read-only-запросы
+  (`app/panel/queries.py`, репозитории, `app.obs.metrics`) и делегирование действий
+  («Запустить сейчас» → `orchestrator.run` фоновой задачей). Server-rendered (Jinja2 +
+  минимальный JS, без Node-сборки); только `127.0.0.1`, без авторизации (SPEC §9.6 — позже).
 
 ### Соответствие команда ↔ скрипт
 
@@ -136,6 +142,7 @@ class TaskQueue(Protocol):
 | `run-once`        | `app.scripts.orchestrator`         | `python -m app.scripts.orchestrator`                         |
 | `serve`           | `app.scripts.orchestrator`         | `python -m app.scripts.orchestrator serve`                  |
 | `metrics`         | `app.scripts.report`               | `python -m app.scripts.report --run <id> \| --last`          |
+| `panel`           | `app.scripts.panel`                | `python -m app.scripts.panel [--host …] [--port …]`          |
 
 `app/cli.py` — **чистый диспетчер**: импортирует только argparse/asyncio, `configure_logging` и
 `app.scripts.*`; каждая подкоманда — однострочная делегация в скрипт (парсинг аргументов +

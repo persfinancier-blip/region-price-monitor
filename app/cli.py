@@ -11,7 +11,7 @@ import sys
 
 from app.config import get_settings
 from app.obs.logging import configure_logging
-from app.scripts import control_panel, health, orchestrator, ozon, parameters, report, wb
+from app.scripts import control_panel, health, orchestrator, ozon, panel, parameters, report, wb
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -60,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers.add_parser("serve", help="Start the cron daemon (APScheduler) and block")
 
+    panel_parser = subparsers.add_parser("panel", help="Start the local web panel (Dashboard)")
+    panel_parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    panel_parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+
     metrics_parser = subparsers.add_parser(
         "metrics", help="Print a run's metrics (human summary + Prometheus text)"
     )
@@ -92,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_once())
     if args.command == "serve":
         return asyncio.run(orchestrator.serve())
+    if args.command == "panel":
+        return panel.run(args.host, args.port)
     if args.command == "metrics":
         return asyncio.run(report.run(args.run_id, args.last))
 
