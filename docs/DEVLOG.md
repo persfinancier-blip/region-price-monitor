@@ -228,3 +228,45 @@
   `pgdata`/`cookies` создаются и удаляются вместе с `down -v`. Полный «боевой» прогон против
   реальных WB/Ozon + реальных региональных прокси — по-прежнему задача владельца (нет доступа
   к реальным прокси/сети маркетплейсов в песочнице).
+
+## 2026-07-23 — Рефактор скриптов и оболочки (`prompt-09-script-shell-separation`, ADR-0008)
+
+- **Структурный, поведенчески нейтральный рефакторинг** — вся бизнес-логика `app/cli.py`
+  (`_run_healthcheck`/`_import_products`/`_import_regions`/`_measure_wb`/`_measure_ozon`/
+  `_warm_ozon`/`_run_once`) вынесена в новый пакет `app/scripts/`: `parameters.py` (снэпшот
+  `Settings` + фабрика сессий + endpoints, печать с маской секретов), `control_panel.py`
+  (активный набор «товар × регион» — то же правило, что `_active_pairs`: WB все регионы, Ozon
+  только с `ozon` в `geo`), `health.py` (`ProxyHealthService` + `is_stale`/`warm_if_stale`,
+  `HealthReport`, `--fix`), `wb.py`/`ozon.py` (обёртка над `measure_pair`, включая
+  интерактивный прогрев кук Ozon и путь «нужен прогрев — пропущено»), `orchestrator.py`
+  (`Step`/`Pipeline` — топологический порядок по Кану поверх `parameters → control_panel →
+  health → run_once`; сам замер не переизобретён — вызывает существующий
+  `app.scheduler.runner.run_once`).
+- Каждый скрипт работает и отдельно (`python -m app.scripts.<name>`), и под `app/cli.py` —
+  теперь тонкой оболочкой: подкоманды (`healthcheck`/`import-products`/`import-regions`/
+  `measure-wb`/`measure-ozon`/`warm-ozon`/`run-once`/`serve`/`metrics`) только парсят
+  аргументы и форматируют вывод; `serve` планирует `orchestrator.run(mode=RunMode.SCHEDULED)`
+  через существующий `Scheduler`. Команды/флаги/вывод/коды выхода не изменились —
+  `docker-compose.prod.yml`/`Makefile` работают без правок.
+- **`tests/test_measure_wb.py`** (патчит `app.cli.get_session`/`app.cli.WbCollector.collect`,
+  зовёт `cli._measure_wb`) не тронут — `_measure_wb`/`_measure_ozon` в `cli.py` по-прежнему
+  читают модульные имена `get_session`/`WbCollector`/`OzonCollector` в момент вызова и
+  прокидывают их в `wb.run()`/`ozon.run()` как инжектируемые зависимости, так что патчи на
+  `app.cli.*` продолжают работать без изменений в тесте.
+- Новые тесты (без изменения существующих ассертов): `tests/test_scripts_parameters.py`,
+  `tests/test_scripts_control_panel.py`, `tests/test_scripts_health.py` (юнит, без БД/сети/
+  Playwright — стаб-хранилище кук и стаб-`ProxyHealthService.verdict`), `tests/test_scripts_wb.py`,
+  `tests/test_scripts_ozon.py` (argv-смоук без БД + БД-тесты по схеме `test_runner.py`, скип
+  без `TEST_DATABASE_URL`/`DATABASE_URL`), `tests/test_orchestrator.py` (чистый тест
+  `Pipeline`-механизма — порядок по зависимостям, детект цикла/неизвестной зависимости — плюс
+  БД-тест: `orchestrator.run()` даёт тот же `RunSummary`/метрики, что и `run_once` напрямую,
+  включая Фазу-6 сценарий искусственного бана + алерт).
+- **Вживую на локальном Postgres 16 (Docker) — 126 passed** (весь прежний набор +
+  6 новых тестовых файлов, БД-тесты не скипнуты). В песочнице без `DATABASE_URL` — 85 passed,
+  9 skipped (ожидаемо, DB-гейтед тесты).
+- DoD-гейт (`ruff check`/`ruff format --check`/`mypy app`/`pytest`) зелёный.
+- **`docs/adr/0008-script-shell-separation.md`** — статус обновлён на «принято, реализуется —
+  структурная часть в prompt-09»; формат пайплайна (YAML/JSON) и редактор панели остаются
+  Фазе 8.
+- **Не делали в этом слайсе**: YAML/JSON-формат пайплайна, панель/FastAPI/UI (Фаза 8);
+  изменение схемы БД, новых enum-значений, новых зависимостей.

@@ -1,35 +1,29 @@
-"""Command-line entrypoint for region-price-monitor."""
+"""Command-line entrypoint for region-price-monitor.
+
+Thin shell (ADR-0008): every subcommand delegates to a script under
+`app/scripts/` and only parses args / formats output. No business logic lives
+here — see `app/scripts/*.py` for the wrapped implementations.
+"""
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 
 from sqlalchemy import select
 
-from app.collectors.measure import measure_pair
 from app.collectors.ozon import OzonCollector
 from app.collectors.wb import WbCollector
 from app.config import get_settings
-from app.cookies.fs import make_cookie_store
-from app.cookies.warm import CookieWarmer, warm_if_stale
 from app.db import get_session
 from app.db import healthcheck as db_healthcheck
-from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
+from app.enums import RunMode
 from app.models import Run
 from app.obs.logging import configure_logging
 from app.obs.metrics import compute_run_metrics, to_prometheus
-from app.proxy.static import make_proxy_provider
-from app.repositories import (
-    AttemptRepository,
-    MeasureQueueRepository,
-    PriceSnapshotRepository,
-    ProductRepository,
-    RegionRepository,
-    RunRepository,
-)
-from app.scheduler.runner import Scheduler, run_once
+from app.scheduler.runner import Scheduler
+from app.scripts import ozon as ozon_script
+from app.scripts import wb as wb_script
 
 
 async def _run_healthcheck() -> int:
@@ -46,6 +40,11 @@ async def _run_healthcheck() -> int:
 
 
 async def _import_products(path: str) -> int:
+    import json
+
+    from app.enums import Marketplace
+    from app.repositories import ProductRepository
+
     with open(path, encoding="utf-8") as fh:
         items = json.load(fh)
 
@@ -68,6 +67,10 @@ async def _import_products(path: str) -> int:
 
 
 async def _import_regions(path: str) -> int:
+    import json
+
+    from app.repositories import RegionRepository
+
     with open(path, encoding="utf-8") as fh:
         items = json.load(fh)
 
@@ -89,80 +92,30 @@ async def _import_regions(path: str) -> int:
 
 
 async def _measure_wb(region_codes: list[str] | None, sku: str | None) -> int:
+    from app.cookies.fs import make_cookie_store
+    from app.proxy.static import make_proxy_provider
+
     settings = get_settings()
-    provider = make_proxy_provider(settings)
     cookie_store = make_cookie_store(settings)
-    wb_collector = WbCollector()
-    ozon_collector = OzonCollector(cookie_store)
-
-    async with get_session() as session:
-        region_repo = RegionRepository(session)
-        product_repo = ProductRepository(session)
-        run_repo = RunRepository(session)
-        snapshot_repo = PriceSnapshotRepository(session)
-        queue_repo = MeasureQueueRepository(session)
-        attempt_repo = AttemptRepository(session)
-
-        if region_codes:
-            regions = []
-            for code in region_codes:
-                region = await region_repo.get_by_code(code)
-                if region is None:
-                    print(f"unknown region: {code}", file=sys.stderr)
-                    return 1
-                regions.append(region)
-        else:
-            regions = await region_repo.list_active()
-
-        if sku is not None:
-            product = await product_repo.get_by_sku(marketplace=Marketplace.WB, sku=sku)
-            if product is None:
-                print(f"unknown WB product: {sku}", file=sys.stderr)
-                return 1
-            products = [product]
-        else:
-            products = [p for p in await product_repo.list_active() if p.marketplace == Marketplace.WB]
-
-        run = await run_repo.create(mode=RunMode.MANUAL)
-
-        stats: dict[str, int] = {}
-        for product in products:
-            for region in regions:
-                queue_item = await queue_repo.create(
-                    run_id=run.id, product_id=product.id, region_id=region.id
-                )
-
-                outcome = await measure_pair(
-                    run_id=run.id,
-                    product=product,
-                    region=region,
-                    provider=provider,
-                    wb_collector=wb_collector,
-                    ozon_collector=ozon_collector,
-                    cookie_store=cookie_store,
-                    settings=settings,
-                    interactive=False,
-                    queue_id=queue_item.id,
-                    snapshot_repo=snapshot_repo,
-                    attempt_repo=attempt_repo,
-                )
-                assert outcome is not None  # WB never returns the Ozon "needs warm" sentinel
-
-                await queue_repo.mark(
-                    queue_item, QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
-                )
-
-                stats[outcome.value] = stats.get(outcome.value, 0) + 1
-                print(f"  sku={product.sku} region={region.code}: {outcome.value}")
-
-        await run_repo.finish(run, RunStatus.DONE, stats)
-        await session.commit()
-
-    print(f"run {run.id}: " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
-    return 0
+    return await wb_script.run(
+        region_codes,
+        sku,
+        session_factory=get_session,
+        settings=settings,
+        provider=make_proxy_provider(settings),
+        cookie_store=cookie_store,
+        wb_collector=WbCollector(),
+        ozon_collector=OzonCollector(cookie_store),
+    )
 
 
 async def _warm_ozon(region_codes: list[str] | None) -> int:
+    from app.cookies.fs import make_cookie_store
+    from app.cookies.warm import CookieWarmer, warm_if_stale
+    from app.enums import Marketplace
+    from app.proxy.static import make_proxy_provider
+    from app.repositories import RegionRepository
+
     settings = get_settings()
     store = make_cookie_store(settings)
     warmer = CookieWarmer()
@@ -191,98 +144,31 @@ async def _warm_ozon(region_codes: list[str] | None) -> int:
 
 
 async def _measure_ozon(region_codes: list[str] | None, sku: str | None) -> int:
+    from app.cookies.fs import make_cookie_store
+    from app.proxy.static import make_proxy_provider
+
     settings = get_settings()
     store = make_cookie_store(settings)
-    wb_collector = WbCollector()
-    ozon_collector = OzonCollector(store)
     provider = make_proxy_provider(settings)
-    interactive = sys.stdin.isatty()
-
-    async with get_session() as session:
-        region_repo = RegionRepository(session)
-        product_repo = ProductRepository(session)
-        run_repo = RunRepository(session)
-        snapshot_repo = PriceSnapshotRepository(session)
-        queue_repo = MeasureQueueRepository(session)
-        attempt_repo = AttemptRepository(session)
-
-        if region_codes:
-            regions = []
-            for code in region_codes:
-                region = await region_repo.get_by_code(code)
-                if region is None:
-                    print(f"unknown region: {code}", file=sys.stderr)
-                    return 1
-                regions.append(region)
-        else:
-            regions = [r for r in await region_repo.list_active() if "ozon" in r.geo]
-
-        if sku is not None:
-            product = await product_repo.get_by_sku(marketplace=Marketplace.OZON, sku=sku)
-            if product is None:
-                print(f"unknown Ozon product: {sku}", file=sys.stderr)
-                return 1
-            products = [product]
-        else:
-            products = [p for p in await product_repo.list_active() if p.marketplace == Marketplace.OZON]
-
-        run = await run_repo.create(mode=RunMode.MANUAL)
-
-        stats: dict[str, int] = {}
-        for product in products:
-            for region in regions:
-                if interactive:
-                    lease = await provider.acquire(region.code)
-                    warm_if_stale(
-                        store,
-                        CookieWarmer(),
-                        Marketplace.OZON,
-                        region,
-                        settings.ozon_cookie_ttl_hours,
-                        lease.proxy_url,
-                    )
-
-                queue_item = await queue_repo.create(
-                    run_id=run.id, product_id=product.id, region_id=region.id
-                )
-
-                outcome = await measure_pair(
-                    run_id=run.id,
-                    product=product,
-                    region=region,
-                    provider=provider,
-                    wb_collector=wb_collector,
-                    ozon_collector=ozon_collector,
-                    cookie_store=store,
-                    settings=settings,
-                    interactive=interactive,
-                    queue_id=queue_item.id,
-                    snapshot_repo=snapshot_repo,
-                    attempt_repo=attempt_repo,
-                )
-
-                if outcome is None:
-                    print(f"  sku={product.sku} region={region.code}: needs warm — skipped")
-                    await queue_repo.mark(queue_item, QueueStatus.FAILED)
-                    continue
-
-                await queue_repo.mark(
-                    queue_item, QueueStatus.DONE if outcome == Outcome.OK else QueueStatus.FAILED
-                )
-
-                stats[outcome.value] = stats.get(outcome.value, 0) + 1
-                print(f"  sku={product.sku} region={region.code}: {outcome.value}")
-
-        await run_repo.finish(run, RunStatus.DONE, stats)
-        await session.commit()
-
-    print(f"run {run.id}: " + ", ".join(f"{k}={v}" for k, v in sorted(stats.items())))
-    return 0
+    return await ozon_script.run(
+        region_codes,
+        sku,
+        session_factory=get_session,
+        settings=settings,
+        provider=provider,
+        cookie_store=store,
+        wb_collector=WbCollector(),
+        ozon_collector=OzonCollector(store),
+    )
 
 
 async def _run_once() -> int:
+    from app.scripts import orchestrator
+
     settings = get_settings()
-    summary = await run_once(get_session, settings, mode=RunMode.MANUAL, interactive=sys.stdin.isatty())
+    summary = await orchestrator.run(
+        mode=RunMode.MANUAL, interactive=sys.stdin.isatty(), session_factory=get_session, settings=settings
+    )
     print(f"run {summary.run_id}: " + ", ".join(f"{k}={v}" for k, v in sorted(summary.stats.items())))
     return 0
 
