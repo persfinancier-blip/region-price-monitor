@@ -13,7 +13,40 @@
 - Прогрев кук Ozon в проде — ручной шаг (см. §5); headless-прогрев на Linux-сервере
   (Xvfb) — открытый вопрос ADR-0006, не решён в этом слайсе.
 
-## 1. Клон и `.env`
+## 0. Локальный режим (без Postgres) — быстрый старт
+
+По умолчанию (`STORAGE_BACKEND=local`, [ADR-0009](adr/0009-local-first-storage.md)) движок
+работает **вообще без базы данных** — внутреннее состояние (справочники, прогоны, очередь,
+попытки, снапшоты цен) лежит плоскими файлами под `LOCAL_STATE_DIR` (по умолчанию
+`data/state`). Ни `asyncpg`, ни `alembic`, ни отдельный сервер БД не нужны:
+
+```bash
+pip install -e ".[dev]"
+cp .env.example .env   # STORAGE_BACKEND=local уже стоит по умолчанию
+
+region-price-monitor import-regions seed/regions.json
+region-price-monitor import-products seed/products.json
+region-price-monitor run-once
+region-price-monitor metrics --last
+region-price-monitor panel   # дашборд на http://127.0.0.1:8000, читает тот же локальный стор
+```
+
+Прогреть куки Ozon (тот же шаг, что и в §5, тоже без БД):
+
+```bash
+region-price-monitor warm-ozon --region <код_региона>
+```
+
+`docker-compose.prod.yml`: сервис `app` работает автономно (без `postgres`) — состояние
+переживает рестарт контейнера через именованный volume `state`. Сервис `postgres` запускается
+только явным профилем (`docker compose -f docker-compose.prod.yml --profile postgres up`) —
+нужен лишь при `STORAGE_BACKEND=postgres`.
+
+Чтобы вернуться на Postgres-путь (ADR-0004, прежнее поведение) — поставить
+`STORAGE_BACKEND=postgres` и заполнить `DATABASE_URL`/`POSTGRES_*` как в §1 ниже; тогда
+применимы §§1–9 целиком (миграции, `docker-compose` с профилем `postgres`, и т.д.).
+
+## 1. Клон и `.env` (Postgres-бэкенд)
 
 ```bash
 git clone <repo> && cd region-price-monitor
@@ -42,12 +75,13 @@ cp .env.example .env
 
 ```bash
 make build
-make up
+make up-postgres
 ```
 
-`make up` поднимает `postgres` (именованный volume `pgdata`, healthcheck) и `app`
-(команда по умолчанию — `serve`). Postgres **не публикуется наружу** — порт не
-проброшен на хост, доступ только из сети compose.
+`make up-postgres` поднимает `postgres` (профиль `postgres`, именованный volume `pgdata`,
+healthcheck) и `app` (команда по умолчанию — `serve`). Postgres **не публикуется наружу** —
+порт не проброшен на хост, доступ только из сети compose. (Просто `make up` — без Postgres,
+локальный режим §0; `postgres`-сервис не стартует без профиля.)
 
 Миграции применяются автоматически: `docker/entrypoint.sh` перед стартом любой команды
 контейнера выполняет `alembic upgrade head` (идемпотентно) и только потом запускает
@@ -136,11 +170,14 @@ make metrics
 
 ## 7. Данные и volumes
 
-- `pgdata` — данные Postgres (products, regions, runs, measure_queue, price_snapshots,
-  attempts).
-- `cookies` — прогретые Ozon-куки (`COOKIE_STORE_DIR` внутри контейнера).
+- `state` — локальный стор (`LOCAL_STATE_DIR` внутри контейнера): products/regions/runs/
+  attempts/snapshots/queue плоскими файлами. Используется при `storage_backend=local`
+  (по умолчанию).
+- `pgdata` — данные Postgres (только при `storage_backend=postgres`, профиль `postgres`).
+- `cookies` — прогретые Ozon-куки (`COOKIE_STORE_DIR` внутри контейнера), общие для обоих
+  бэкендов.
 
-Оба — именованные Docker volumes, не в образе. `docker compose -f docker-compose.prod.yml down`
+Все — именованные Docker volumes, не в образе. `docker compose -f docker-compose.prod.yml down`
 (без `-v`) их не трогает.
 
 ## 8. Обновление

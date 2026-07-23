@@ -21,8 +21,8 @@ from app.models import Region
 from app.proxy.base import ProxyProvider
 from app.proxy.health import ProxyHealthService
 from app.proxy.static import make_proxy_provider
-from app.repositories import RegionRepository
 from app.scheduler.runner import SessionFactory
+from app.storage.factory import make_storage
 
 
 @dataclass(frozen=True)
@@ -90,17 +90,14 @@ async def run(
     warmer: CookieWarmer | None = None,
 ) -> HealthReport:
     """Check proxy cooldown + Ozon cookie staleness for active regions; warm stale cookies if `fix`."""
-    from app.db import get_session
-
     settings = settings or get_settings()
-    session_factory = session_factory or get_session
+    session_factory = session_factory or make_storage(settings)
     cookie_store = cookie_store or make_cookie_store(settings)
     warmer = warmer or CookieWarmer()
     health_service = ProxyHealthService(session_factory, settings)
 
-    async with session_factory() as session:
-        region_repo = RegionRepository(session)
-        regions = await region_repo.list_active()
+    async with session_factory() as storage:
+        regions = await storage.regions.list_active()
 
     reports = [
         await _region_health(
@@ -127,26 +124,23 @@ async def warm(
     warmer: CookieWarmer | None = None,
 ) -> int:
     """Warm Ozon cookies for the given regions (default: all active with an Ozon geo entry)."""
-    from app.db import get_session
-
     settings = settings or get_settings()
-    session_factory = session_factory or get_session
+    session_factory = session_factory or make_storage(settings)
     store = cookie_store or make_cookie_store(settings)
     warmer = warmer or CookieWarmer()
     provider = provider or make_proxy_provider(settings)
 
-    async with session_factory() as session:
-        region_repo = RegionRepository(session)
+    async with session_factory() as storage:
         if region_codes:
             regions = []
             for code in region_codes:
-                region = await region_repo.get_by_code(code)
+                region = await storage.regions.get_by_code(code)
                 if region is None:
                     print(f"unknown region: {code}", file=sys.stderr)
                     return 1
                 regions.append(region)
         else:
-            regions = [r for r in await region_repo.list_active() if "ozon" in r.geo]
+            regions = [r for r in await storage.regions.list_active() if "ozon" in r.geo]
 
     for region in regions:
         lease = await provider.acquire(region.code)

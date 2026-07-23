@@ -1,4 +1,4 @@
-.PHONY: build up down migrate run-once warm-ozon metrics logs
+.PHONY: build up up-postgres down migrate run-once warm-ozon metrics logs
 
 COMPOSE = docker compose -f docker-compose.prod.yml
 
@@ -8,8 +8,12 @@ build:
 up:
 	$(COMPOSE) up -d
 
+# STORAGE_BACKEND=postgres only: also starts the `postgres` service (profile-gated, ADR-0009).
+up-postgres:
+	$(COMPOSE) --profile postgres up -d
+
 down:
-	$(COMPOSE) down
+	$(COMPOSE) --profile postgres down
 
 migrate:
 	$(COMPOSE) run --rm app alembic upgrade head

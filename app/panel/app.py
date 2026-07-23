@@ -12,11 +12,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.db import get_session
+from app.config import get_settings
 from app.enums import RunMode
 from app.obs.metrics import RunMetrics, compute_run_metrics
 from app.panel import queries
 from app.scripts import control_panel, orchestrator
+from app.storage.factory import make_storage
 
 _BASE_DIR = Path(__file__).parent
 _TEMPLATES = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
@@ -42,11 +43,12 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request) -> HTMLResponse:
-        async with get_session() as session:
-            runs = await queries.recent_runs(session, limit=10)
-            snapshots = await queries.latest_snapshots(session)
+        storage_factory = make_storage(get_settings())
+        async with storage_factory() as storage:
+            runs = await queries.recent_runs(storage, limit=10)
+            snapshots = await queries.latest_snapshots(storage)
             run_metrics: dict[int, RunMetrics] = {
-                run.id: await compute_run_metrics(session, run.id) for run in runs
+                run.id: await compute_run_metrics(storage, run.id) for run in runs
             }
 
         work_set = await control_panel.run()

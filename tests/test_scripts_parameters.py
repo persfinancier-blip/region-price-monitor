@@ -55,7 +55,7 @@ def test_main_prints_report(capsys) -> None:
 
 async def test_healthcheck_ok_prints_ok(capsys) -> None:
     with patch("app.db.healthcheck", return_value=True):
-        result = await parameters.healthcheck()
+        result = await parameters.healthcheck(Settings(storage_backend="postgres"))
 
     assert result == 0
     assert "OK" in capsys.readouterr().out
@@ -63,10 +63,18 @@ async def test_healthcheck_ok_prints_ok(capsys) -> None:
 
 async def test_healthcheck_failure_exits_1(capsys) -> None:
     with patch("app.db.healthcheck", return_value=False):
-        result = await parameters.healthcheck()
+        result = await parameters.healthcheck(Settings(storage_backend="postgres"))
 
     assert result == 1
     assert "FAILED" in capsys.readouterr().err
+
+
+async def test_healthcheck_local_backend_checks_dir_writable(tmp_path, capsys) -> None:
+    settings = Settings(storage_backend="local", local_state_dir=str(tmp_path / "state"))
+    result = await parameters.healthcheck(settings)
+
+    assert result == 0
+    assert "OK" in capsys.readouterr().out
 
 
 def test_main_check_dispatches_to_healthcheck() -> None:

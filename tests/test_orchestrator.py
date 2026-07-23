@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -19,6 +20,7 @@ from app.enums import Marketplace, RunMode
 from app.repositories import ProductRepository, RegionRepository
 from app.scheduler.runner import Scheduler
 from app.scripts.orchestrator import Pipeline, Step
+from app.storage.postgres import PostgresStorage
 
 
 async def test_pipeline_executes_steps_in_dependency_order() -> None:
@@ -152,7 +154,13 @@ async def session() -> AsyncIterator[AsyncSession]:
 def _session_factory():
     engine = make_engine(TEST_DATABASE_URL)
     factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    return factory
+
+    @asynccontextmanager
+    async def _storage_factory():
+        async with factory() as sess:
+            yield PostgresStorage(sess)
+
+    return _storage_factory
 
 
 async def test_orchestrator_run_matches_run_once_shape(session: AsyncSession) -> None:

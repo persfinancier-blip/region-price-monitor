@@ -20,6 +20,7 @@ from app.enums import Marketplace, Outcome
 from app.models import Attempt, MeasureQueueItem
 from app.repositories import ProductRepository, RegionRepository
 from app.scripts import wb as wb_script
+from app.storage.postgres import PostgresStorage
 
 
 def test_main_help_smoke() -> None:
@@ -81,7 +82,7 @@ async def test_wb_run_writes_queue_and_attempt_and_snapshot_on_ok(session: Async
 
     @asynccontextmanager
     async def fake_session_factory():
-        yield session
+        yield PostgresStorage(session)
 
     with patch("app.collectors.wb.WbCollector.collect", return_value=obs):
         result = await wb_script.run([region.code], product.sku, session_factory=fake_session_factory)

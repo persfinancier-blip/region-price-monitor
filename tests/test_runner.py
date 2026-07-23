@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from app.db import make_engine
 from app.enums import Marketplace, Outcome, QueueStatus, RunMode
 from app.models import Attempt, MeasureQueueItem, PriceSnapshot
 from app.repositories import ProductRepository, RegionRepository
+from app.storage.postgres import PostgresStorage
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -52,10 +54,20 @@ async def session() -> AsyncIterator[AsyncSession]:
     await engine.dispose()
 
 
-def _session_factory():
+def _raw_session_factory() -> async_sessionmaker[AsyncSession]:
     engine = make_engine(TEST_DATABASE_URL)
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    return factory
+    return async_sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def _session_factory():
+    factory = _raw_session_factory()
+
+    @asynccontextmanager
+    async def _storage_factory() -> AsyncIterator[PostgresStorage]:
+        async with factory() as sess:
+            yield PostgresStorage(sess)
+
+    return _storage_factory
 
 
 async def test_run_once_writes_snapshot_and_attempt_on_ok(session: AsyncSession) -> None:
@@ -94,7 +106,7 @@ async def test_run_once_writes_snapshot_and_attempt_on_ok(session: AsyncSession)
     ):
         summary = await run_once(factory, settings, mode=RunMode.MANUAL, interactive=False)
 
-    async with factory() as verify_session:
+    async with _raw_session_factory()() as verify_session:
         queue_result = await verify_session.execute(
             select(MeasureQueueItem).where(
                 MeasureQueueItem.run_id == summary.run_id,
@@ -153,7 +165,7 @@ async def test_run_once_retries_bounded_by_retry_limit(session: AsyncSession) ->
     ):
         summary = await run_once(factory, settings, mode=RunMode.MANUAL, interactive=False)
 
-    async with factory() as verify_session:
+    async with _raw_session_factory()() as verify_session:
         queue_result = await verify_session.execute(
             select(MeasureQueueItem).where(
                 MeasureQueueItem.run_id == summary.run_id,
@@ -322,7 +334,7 @@ async def test_run_once_skips_cooling_down_region_without_attempt(session: Async
     ):
         summary = await run_once(factory, settings, mode=RunMode.MANUAL, interactive=False)
 
-    async with factory() as verify_session:
+    async with _raw_session_factory()() as verify_session:
         queue_result = await verify_session.execute(
             select(MeasureQueueItem).where(
                 MeasureQueueItem.run_id == summary.run_id,

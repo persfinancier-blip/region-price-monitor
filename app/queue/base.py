@@ -34,7 +34,8 @@ class TaskQueue(Protocol):
         ...
 
     async def claim(self, limit: int) -> list[QueueItem]:
-        """Atomically claim up to `limit` pending items (`FOR UPDATE SKIP LOCKED`)."""
+        """Atomically claim up to `limit` pending items (`FOR UPDATE SKIP LOCKED` on Postgres;
+        no cross-process lock on the local backend — see `app/queue/local.py`)."""
         ...
 
     async def complete(self, item: QueueItem, status: QueueStatus) -> None:

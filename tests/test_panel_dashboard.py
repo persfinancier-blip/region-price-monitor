@@ -84,7 +84,7 @@ async def _fake_control_panel_run(*args, **kwargs):
 
 def test_dashboard_renders_health_runs_prices_cities() -> None:
     with (
-        patch("app.panel.app.get_session", _fake_session),
+        patch("app.panel.app.make_storage", return_value=_fake_session),
         patch("app.panel.app.queries.recent_runs", _fake_recent_runs),
         patch("app.panel.app.queries.latest_snapshots", _fake_latest_snapshots),
         patch("app.panel.app.compute_run_metrics", _fake_compute_run_metrics),
@@ -101,7 +101,7 @@ def test_dashboard_renders_health_runs_prices_cities() -> None:
 
 def test_dashboard_masks_proxy_credentials() -> None:
     with (
-        patch("app.panel.app.get_session", _fake_session),
+        patch("app.panel.app.make_storage", return_value=_fake_session),
         patch("app.panel.app.queries.recent_runs", _fake_recent_runs),
         patch("app.panel.app.queries.latest_snapshots", _fake_latest_snapshots),
         patch("app.panel.app.compute_run_metrics", _fake_compute_run_metrics),

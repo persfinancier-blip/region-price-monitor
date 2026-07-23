@@ -2,11 +2,8 @@
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.enums import Outcome
-from app.models import Attempt, MeasureQueueItem
+from app.storage.base import Storage
 
 
 @dataclass(frozen=True)
@@ -49,21 +46,15 @@ def metrics_from_counts(run_id: int, counts: dict[str, int], total_duration_ms: 
     )
 
 
-async def compute_run_metrics(session: AsyncSession, run_id: int) -> RunMetrics:
-    """Aggregate a run's attempts (joined via `measure_queue`) into `RunMetrics`."""
-    stmt = (
-        select(Attempt.outcome, func.count(), func.coalesce(func.sum(Attempt.duration_ms), 0))
-        .join(MeasureQueueItem, Attempt.queue_id == MeasureQueueItem.id)
-        .where(MeasureQueueItem.run_id == run_id)
-        .group_by(Attempt.outcome)
-    )
-    result = await session.execute(stmt)
+async def compute_run_metrics(storage: Storage, run_id: int) -> RunMetrics:
+    """Aggregate a run's attempts (via the storage seam) into `RunMetrics`."""
+    attempts = await storage.attempts.for_run(run_id)
 
     counts: dict[str, int] = {}
     total_duration_ms = 0
-    for outcome, count, duration_sum in result.all():
-        counts[outcome.value] = count
-        total_duration_ms += int(duration_sum)
+    for attempt in attempts:
+        counts[attempt.outcome.value] = counts.get(attempt.outcome.value, 0) + 1
+        total_duration_ms += attempt.duration_ms
 
     return metrics_from_counts(run_id, counts, total_duration_ms)
 

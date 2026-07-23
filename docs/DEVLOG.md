@@ -349,3 +349,43 @@
 - **Не делали в этом слайсе**: Куки/Параметры подключения/Редактор скриптов/настройки городов
   (Фаза 8.2–8.5, частично блокированы SPEC §9); авторизация панели; шифрование секретов; изменение
   схемы БД, новых enum-значений.
+
+## 2026-07-23 — Local-first движок, Postgres опционален (`prompt-12-local-first-engine`)
+
+- Решение владельца: отсутствие Postgres не должно блокировать продукт. Оформлено как
+  [ADR-0009](adr/0009-local-first-storage.md) — ревизия [ADR-0004](adr/0004-scheduling-runtime.md)
+  (очередь-в-Postgres перестаёт быть единственным вариантом).
+- **Storage seam**: `app/storage/base.py` — Protocol'ы репозиториев (`Product`/`Region`/`Run`/
+  `MeasureQueue`/`Attempt`/`PriceSnapshot`) один в один с сигнатурами `app/repositories.py`, плюс
+  `Storage`-бандл и `make_storage(settings)`. Два бэкенда: `app/storage/local.py` (плоские
+  JSON/JSONL-файлы под `LOCAL_STATE_DIR`, атомарная запись temp+`os.replace`, монотонные id,
+  деньги — строкой) и `app/storage/postgres.py` (тонкая обёртка над прежними репозиториями, без
+  изменения логики).
+- **Локальная очередь**: `app/queue/local.py` (`LocalTaskQueue`) рядом с `PgTaskQueue`;
+  `app/queue/factory.py::make_task_queue(settings, storage)` выбирает по `storage_backend`.
+  Задокументировано: `FOR UPDATE SKIP LOCKED` — гарантия конкурентности только у Postgres,
+  локальный бэкенд не защищён от гонки между процессами (расчёт на один процесс/машину).
+- **Движок целиком переведён на seam**: `app/scheduler/runner.py` (`run_once`/`_worker`),
+  `app/collectors/measure.py`, скрипты `wb`/`ozon`/`control_panel`/`health`/`report`/
+  `orchestrator`, `app/panel/queries.py`+`app/panel/app.py` — везде репозитории строятся через
+  `make_storage(settings)`, очередь — через `make_task_queue`. `ProxyHealthService.verdict` и
+  `compute_run_metrics` тоже читают через seam (`attempts.recent_for_proxy_ref`/`for_run`), а не
+  прямым SQL — поведение идентично на обоих бэкендах.
+- **Конфиг**: `storage_backend: str = "local"` (default) / `"postgres"`, `local_state_dir: str =
+  "data/state"` в `app/config.py` + `.env.example`.
+- **Docker**: `docker/entrypoint.sh` мигрирует (`alembic upgrade head`) только при
+  `STORAGE_BACKEND=postgres`; на `local` — создаёт `LOCAL_STATE_DIR`. `docker-compose.prod.yml`:
+  `postgres` за профилем `postgres` (не стартует без него), `app` работает автономно с volume
+  `state`. `Makefile`: `make up` — без Postgres; `make up-postgres` — с профилем.
+- **Тесты**: `tests/test_storage_local.py` (17 тестов — round-trip каждой repo-операции локально,
+  без БД) и `tests/test_local_end_to_end.py` (5 тестов — импорт → `run_once` → метрики/health/
+  control_panel на `storage_backend=local`, стаб-коллекторы, без Postgres). Существующие
+  DB-gated тесты (`test_runner.py`/`test_orchestrator.py`/`test_metrics.py`/`test_proxy_health.py`/
+  `test_scripts_wb.py`) адаптированы под новую сигнатуру (`PostgresStorage(session)` вместо
+  голой сессии) — ассерты не менялись. Юнит-тесты без БД (`test_scripts_control_panel.py`/
+  `test_scripts_health.py`/`test_panel_dashboard.py`) переключены на патчинг `Local*Repository`
+  вместо SQLAlchemy-репозиториев, т.к. `local` — новый дефолт. DoD-гейт зелёный: 140 passed / 10
+  skipped (без Postgres в песочнице).
+- **Не делали в этом слайсе** (следующие): настраиваемые source/sink-адаптеры (CSV/Excel/БД) +
+  маппинг полей — `prompt-13`; мастер настройки — `prompt-14`; хранилище секретов (снято для
+  локального режима, SPEC §9.3); Postgres-путь не удалён, работает за тем же seam.

@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from app.config import Settings
 from app.enums import Marketplace
-from app.repositories import ProductRepository, RegionRepository
 from app.scripts import control_panel
+from app.storage.local import LocalProductRepository, LocalRegionRepository
 
 
 class _FakeProduct:
@@ -24,19 +24,23 @@ class _FakeRegion:
         self.geo = geo
 
 
-@asynccontextmanager
-async def _fake_session():
-    yield object()
+class _FakeStorage:
+    def __init__(self) -> None:
+        self.products = LocalProductRepository.__new__(LocalProductRepository)
+        self.regions = LocalRegionRepository.__new__(LocalRegionRepository)
 
-
-class _FakeCommittableSession:
     async def commit(self) -> None:
         pass
 
 
 @asynccontextmanager
+async def _fake_session():
+    yield _FakeStorage()
+
+
+@asynccontextmanager
 async def _fake_committable_session():
-    yield _FakeCommittableSession()
+    yield _FakeStorage()
 
 
 async def test_run_mirrors_active_pairs_semantics() -> None:
@@ -53,8 +57,8 @@ async def test_run_mirrors_active_pairs_semantics() -> None:
         return [msk, spb]
 
     with (
-        patch.object(ProductRepository, "list_active", list_active_products, autospec=False),
-        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalProductRepository, "list_active", list_active_products, autospec=False),
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
     ):
         work_set = await control_panel.run(_fake_session, Settings())
 
@@ -81,8 +85,8 @@ async def test_format_report_masks_proxy_ref() -> None:
         return [msk]
 
     with (
-        patch.object(ProductRepository, "list_active", list_active_products, autospec=False),
-        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalProductRepository, "list_active", list_active_products, autospec=False),
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
     ):
         work_set = await control_panel.run(_fake_session, settings)
 
@@ -123,10 +127,10 @@ async def test_import_products_reports_imported_and_updated(tmp_path, capsys) ->
     )
 
     with (
-        patch.object(ProductRepository, "list_active", list_active_products, autospec=False),
-        patch.object(ProductRepository, "upsert", upsert, autospec=False),
+        patch.object(LocalProductRepository, "list_active", list_active_products, autospec=False),
+        patch.object(LocalProductRepository, "upsert", upsert, autospec=False),
     ):
-        result = await control_panel.import_products(str(path), session_factory=_fake_committable_session)
+        result = await control_panel.import_products(str(path), storage_factory=_fake_committable_session)
 
     assert result == 0
     assert upserted == [(Marketplace.WB, "existing-sku"), (Marketplace.WB, "new-sku")]
@@ -156,10 +160,10 @@ async def test_import_regions_reports_imported_and_updated(tmp_path, capsys) -> 
     )
 
     with (
-        patch.object(RegionRepository, "list_active", list_active_regions, autospec=False),
-        patch.object(RegionRepository, "upsert", upsert, autospec=False),
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalRegionRepository, "upsert", upsert, autospec=False),
     ):
-        result = await control_panel.import_regions(str(path), session_factory=_fake_committable_session)
+        result = await control_panel.import_regions(str(path), storage_factory=_fake_committable_session)
 
     assert result == 0
     assert upserted == ["msk", "spb"]

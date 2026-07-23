@@ -19,7 +19,7 @@ from app.enums import Marketplace, Outcome
 from app.models import Product, Region
 from app.proxy.base import ProxyProvider
 from app.proxy.health import ProxyOnCooldown
-from app.repositories import AttemptRepository, PriceSnapshotRepository
+from app.storage.base import AttemptRepositoryProto, PriceSnapshotRepositoryProto
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ async def measure_pair(
     settings: Settings,
     interactive: bool,
     queue_id: int,
-    snapshot_repo: PriceSnapshotRepository,
-    attempt_repo: AttemptRepository,
+    snapshot_repo: PriceSnapshotRepositoryProto,
+    attempt_repo: AttemptRepositoryProto,
     pacer: RatePacer = _NULL_PACER,
 ) -> Outcome | None:
     """Run one (product, region) measurement attempt and return its Outcome.

@@ -8,6 +8,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    storage_backend: str = "local"
+    local_state_dir: str = "data/state"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/region_price_monitor"
     schedule_cron: str = "0 */6 * * *"
     max_concurrency: int = 5

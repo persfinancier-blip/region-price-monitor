@@ -15,6 +15,7 @@ from app.db import make_engine
 from app.enums import Marketplace
 from app.repositories import ProductRepository, RegionRepository
 from app.scripts import report
+from app.storage.postgres import PostgresStorage
 
 
 def test_main_requires_run_or_last() -> None:
@@ -91,7 +92,7 @@ async def test_run_prints_summary_for_explicit_run_id(session: AsyncSession, cap
 
     @asynccontextmanager
     async def fake_session_factory():
-        yield session
+        yield PostgresStorage(session)
 
     result = await report.run(run_id, False, session_factory=fake_session_factory)
 
@@ -106,7 +107,7 @@ async def test_run_last_resolves_most_recent_run(session: AsyncSession, capsys) 
 
     @asynccontextmanager
     async def fake_session_factory():
-        yield session
+        yield PostgresStorage(session)
 
     result = await report.run(None, True, session_factory=fake_session_factory)
 
@@ -118,7 +119,7 @@ async def test_run_last_resolves_most_recent_run(session: AsyncSession, capsys) 
 async def test_run_missing_run_reports_error(session: AsyncSession) -> None:
     @asynccontextmanager
     async def fake_session_factory():
-        yield session
+        yield PostgresStorage(session)
 
     result = await report.run(None, False, session_factory=fake_session_factory)
 

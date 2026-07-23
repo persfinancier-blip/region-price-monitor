@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
@@ -29,6 +30,7 @@ from app.repositories import (
     RegionRepository,
     RunRepository,
 )
+from app.storage.postgres import PostgresStorage
 
 NOW = datetime.datetime(2026, 7, 23, 12, 0, 0, tzinfo=datetime.UTC)
 
@@ -170,7 +172,14 @@ async def session() -> AsyncIterator[AsyncSession]:
 
 def _session_factory():
     engine = make_engine(TEST_DATABASE_URL)
-    return async_sessionmaker(bind=engine, expire_on_commit=False)
+    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
+
+    @asynccontextmanager
+    async def _storage_factory():
+        async with factory() as sess:
+            yield PostgresStorage(sess)
+
+    return _storage_factory
 
 
 async def test_service_verdict_reads_recent_bans_from_attempts(session: AsyncSession) -> None:

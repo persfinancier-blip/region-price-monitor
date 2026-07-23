@@ -65,6 +65,43 @@
 
 Индексы под типовые выборки: `price_snapshots (product_id, region_id, captured_at desc)`; `measure_queue (status, run_id)`.
 
+## Storage seam: local-first, Postgres опционален ([ADR-0009](adr/0009-local-first-storage.md))
+
+Модель данных выше — это форма (products/regions/runs/measure_queue/price_snapshots/attempts),
+не обязательно физическая таблица Postgres. Движок обращается к данным только через
+Protocol-репозитории (`app/storage/base.py`), собираемые фабрикой
+`make_storage(settings) -> Storage`:
+
+- **`local`** (`storage_backend=local`, по умолчанию) — `app/storage/local.py`: те же сущности
+  плоскими файлами под `settings.local_state_dir` (`products.json`/`regions.json`/`queue.json` —
+  весь файл целиком upsert'ится; `runs.jsonl`/`attempts.jsonl`/`snapshots.jsonl` — append-only).
+  Запись — temp-файл + `os.replace` (атомарно); id — монотонный локальный счётчик на сущность.
+  Деньги (`price`/`price_base`/`price_card`) сериализуются как строка, не float.
+- **`postgres`** (`storage_backend=postgres`) — `app/storage/postgres.py`: тонкая обёртка над
+  прежними SQLAlchemy-репозиториями (`app/repositories.py`), без изменения логики.
+
+`TaskQueue` (очередь задач) следует тому же правилу: `make_task_queue(settings, storage)`
+возвращает `LocalTaskQueue` (`app/queue/local.py`, поверх локального стора) или `PgTaskQueue`
+(`app/queue/postgres.py`, `FOR UPDATE SKIP LOCKED`) по тому же переключателю. **`SKIP LOCKED` —
+гарантия конкурентности только у Postgres-бэкенда**: `LocalTaskQueue` не защищена от гонки между
+независимыми процессами — предполагается один процесс/одна машина (локальный однопользовательский
+сценарий).
+
+Оба бэкенда дают идентичное поведение движку: `run_once`/`orchestrator`, скрипты
+`wb`/`ozon`/`control_panel`/`health`/`report`, панель — все строят репозитории и очередь через эти
+две фабрики, ни разу не создавая SQLAlchemy-сессию напрямую. `ProxyHealthService.verdict` и
+`compute_run_metrics` тоже читают через seam (`attempts.recent_for_proxy_ref`/`attempts.for_run`),
+а не прямым SQL — поэтому работают одинаково на обоих бэкендах.
+
+Docker: `docker/entrypoint.sh` запускает `alembic upgrade head` только при
+`STORAGE_BACKEND=postgres`; на `local` — создаёт `LOCAL_STATE_DIR` и пропускает миграции.
+`docker-compose.prod.yml` держит `postgres` за профилем `postgres` — `app` работает автономно.
+
+Осознанно не входит в этот слайс (следующие слайсы): настраиваемые source/sink-адаптеры
+(CSV/Excel/БД) с маппингом полей (`prompt-13`) и мастер настройки (`prompt-14`) — источник
+данных сейчас фиксирован (`import-products`/`import-regions` из локального JSON), сток — тот
+же стор, который выбран `storage_backend`.
+
 ## Ключевые интерфейсы (эскиз)
 
 ```python
@@ -98,7 +135,8 @@ class TaskQueue(Protocol):
 
 - **`parameters`** — резолвит `Settings` + фабрику сессий + адреса (WB card URL, Ozon API URL,
   `COOKIE_STORE_DIR`) в один типизированный снэпшот `Parameters`; печатает их с маской на секретах.
-  `--check` вместо этого проверяет доступность БД (`app.db.healthcheck`) и возвращает её код выхода.
+  `--check` вместо этого проверяет доступность стора: на `local` — что `LOCAL_STATE_DIR`
+  доступен на запись, на `postgres` — `app.db.healthcheck` (`SELECT 1`); возвращает код выхода.
 - **`control_panel`** — активный набор «товар × регион» (то же правило, что и
   `_active_pairs`: WB — все активные регионы, Ozon — только с `ozon` в `geo`) + настройки по
   городу (прокси-ref маскируется только в печатном выводе). Подкоманды `import-products <file>` /
