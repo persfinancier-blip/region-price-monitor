@@ -1,0 +1,55 @@
+{
+  "_comment": "Copy to config/io.json and edit. No file at settings.io_config_path => JSON source, no sink (ADR-0010).",
+
+  "source": {
+    "kind": "csv",
+    "products_path": "data/import/products.csv",
+    "regions_path": "data/import/regions.csv",
+    "mapping": {
+      "products": {
+        "marketplace": "Площадка",
+        "sku": "Артикул",
+        "url": "Ссылка",
+        "name": "Название"
+      },
+      "regions": {
+        "region": "Код города",
+        "name": "Город",
+        "geo": "Гео"
+      }
+    }
+  },
+
+  "sink": {
+    "kind": "xlsx",
+    "path": "data/export/results.xlsx",
+    "sheet": "Результаты",
+    "mapping": {
+      "results": {
+        "marketplace": "A",
+        "sku": "B",
+        "name": "C",
+        "region": "D",
+        "price": "E",
+        "price_no_card": "F",
+        "price_card": "G",
+        "currency": "H",
+        "availability": "I",
+        "measured_at": "J",
+        "status": "K"
+      }
+    }
+  },
+
+  "_db_example": {
+    "kind": "db",
+    "database_url": "postgresql+asyncpg://user:pass@host:5432/dbname",
+    "products_table": "source_products",
+    "regions_table": "source_regions",
+    "results_table": "results",
+    "mapping": {
+      "products": {"marketplace": "mp", "sku": "sku", "url": "url", "name": "title"},
+      "results": {"sku": "sku", "region": "region_code", "price": "price", "measured_at": "ts", "status": "status"}
+    }
+  }
+}

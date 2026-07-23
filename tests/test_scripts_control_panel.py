@@ -200,3 +200,87 @@ def test_main_dispatches_import_regions(tmp_path) -> None:
 
     assert result == 0
     mock_import.assert_called_once_with(str(path))
+
+
+def test_main_import_products_no_file_dispatches_to_configured_source() -> None:
+    with patch.object(control_panel, "import_products_from_source") as mock_import:
+
+        async def _noop(*args, **kwargs):
+            return 0
+
+        mock_import.side_effect = _noop
+        result = control_panel.main(["import-products"])
+
+    assert result == 0
+    mock_import.assert_called_once_with()
+
+
+def test_main_import_regions_no_file_dispatches_to_configured_source() -> None:
+    with patch.object(control_panel, "import_regions_from_source") as mock_import:
+
+        async def _noop(*args, **kwargs):
+            return 0
+
+        mock_import.side_effect = _noop
+        result = control_panel.main(["import-regions"])
+
+    assert result == 0
+    mock_import.assert_called_once_with()
+
+
+async def test_import_products_from_source_upserts_from_configured_source() -> None:
+    class _FakeSource:
+        async def read_products(self):
+            return [{"marketplace": "wb", "sku": "new-sku", "url": "https://x/1", "name": "A"}]
+
+        async def read_regions(self):
+            return []
+
+    async def list_active_products(self):
+        return []
+
+    upserted = []
+
+    async def upsert(self, *, marketplace, sku, url, name):
+        upserted.append((marketplace, sku))
+        return _FakeProduct(1, marketplace, sku)
+
+    with (
+        patch.object(LocalProductRepository, "list_active", list_active_products, autospec=False),
+        patch.object(LocalProductRepository, "upsert", upsert, autospec=False),
+    ):
+        result = await control_panel.import_products_from_source(
+            source=_FakeSource(), storage_factory=_fake_committable_session
+        )
+
+    assert result == 0
+    assert upserted == [(Marketplace.WB, "new-sku")]
+
+
+async def test_import_regions_from_source_accepts_canonical_region_key() -> None:
+    class _FakeSource:
+        async def read_products(self):
+            return []
+
+        async def read_regions(self):
+            return [{"region": "msk", "name": "Moscow", "geo": {}}]
+
+    async def list_active_regions(self):
+        return []
+
+    upserted = []
+
+    async def upsert(self, *, code, name, geo):
+        upserted.append(code)
+        return _FakeRegion(1, code, geo)
+
+    with (
+        patch.object(LocalRegionRepository, "list_active", list_active_regions, autospec=False),
+        patch.object(LocalRegionRepository, "upsert", upsert, autospec=False),
+    ):
+        result = await control_panel.import_regions_from_source(
+            source=_FakeSource(), storage_factory=_fake_committable_session
+        )
+
+    assert result == 0
+    assert upserted == ["msk"]

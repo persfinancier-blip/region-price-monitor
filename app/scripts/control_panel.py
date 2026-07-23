@@ -10,9 +10,12 @@ data keeps the real values for downstream scripts).
 import argparse
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from app.config import Settings, get_settings
 from app.enums import Marketplace
+from app.io.base import ProductSource
+from app.io.factory import make_product_source
 from app.models import Product, Region
 from app.proxy.static import parse_proxy_map
 from app.storage.factory import StorageFactory, make_storage
@@ -71,14 +74,7 @@ async def run(storage_factory: StorageFactory | None = None, settings: Settings 
     return WorkSet(pairs=pairs, cities=cities)
 
 
-async def import_products(
-    path: str, *, storage_factory: StorageFactory | None = None, settings: Settings | None = None
-) -> int:
-    """Upsert products from a JSON file; print `imported <n> / updated <n>`."""
-    with open(path, encoding="utf-8") as fh:
-        items = json.load(fh)
-
-    storage_factory = storage_factory or make_storage(settings or get_settings())
+async def _upsert_products(items: list[dict[str, Any]], *, storage_factory: StorageFactory) -> int:
     imported = 0
     updated = 0
     async with storage_factory() as storage:
@@ -98,21 +94,15 @@ async def import_products(
     return 0
 
 
-async def import_regions(
-    path: str, *, storage_factory: StorageFactory | None = None, settings: Settings | None = None
-) -> int:
-    """Upsert regions from a JSON file; print `imported <n> / updated <n>`."""
-    with open(path, encoding="utf-8") as fh:
-        items = json.load(fh)
-
-    storage_factory = storage_factory or make_storage(settings or get_settings())
+async def _upsert_regions(items: list[dict[str, Any]], *, storage_factory: StorageFactory) -> int:
     imported = 0
     updated = 0
     async with storage_factory() as storage:
         existing_codes = {r.code for r in await storage.regions.list_active()}
         for item in items:
-            await storage.regions.upsert(code=item["code"], name=item["name"], geo=item["geo"])
-            if item["code"] in existing_codes:
+            code: str = item.get("code") or item["region"]
+            await storage.regions.upsert(code=code, name=item["name"], geo=item["geo"])
+            if code in existing_codes:
                 updated += 1
             else:
                 imported += 1
@@ -120,6 +110,58 @@ async def import_regions(
 
     print(f"imported {imported} / updated {updated}")
     return 0
+
+
+async def import_products(
+    path: str, *, storage_factory: StorageFactory | None = None, settings: Settings | None = None
+) -> int:
+    """Upsert products from an explicit JSON file; print `imported <n> / updated <n>`."""
+    with open(path, encoding="utf-8") as fh:
+        items = json.load(fh)
+
+    settings = settings or get_settings()
+    storage_factory = storage_factory or make_storage(settings)
+    return await _upsert_products(items, storage_factory=storage_factory)
+
+
+async def import_regions(
+    path: str, *, storage_factory: StorageFactory | None = None, settings: Settings | None = None
+) -> int:
+    """Upsert regions from an explicit JSON file; print `imported <n> / updated <n>`."""
+    with open(path, encoding="utf-8") as fh:
+        items = json.load(fh)
+
+    settings = settings or get_settings()
+    storage_factory = storage_factory or make_storage(settings)
+    return await _upsert_regions(items, storage_factory=storage_factory)
+
+
+async def import_products_from_source(
+    *,
+    source: ProductSource | None = None,
+    storage_factory: StorageFactory | None = None,
+    settings: Settings | None = None,
+) -> int:
+    """Upsert products through the configured `ProductSource` (ADR-0010); print the same summary."""
+    settings = settings or get_settings()
+    source = source or make_product_source(settings)
+    items = await source.read_products()
+    storage_factory = storage_factory or make_storage(settings)
+    return await _upsert_products(items, storage_factory=storage_factory)
+
+
+async def import_regions_from_source(
+    *,
+    source: ProductSource | None = None,
+    storage_factory: StorageFactory | None = None,
+    settings: Settings | None = None,
+) -> int:
+    """Upsert regions through the configured `ProductSource` (ADR-0010); print the same summary."""
+    settings = settings or get_settings()
+    source = source or make_product_source(settings)
+    items = await source.read_regions()
+    storage_factory = storage_factory or make_storage(settings)
+    return await _upsert_regions(items, storage_factory=storage_factory)
 
 
 def format_report(work_set: WorkSet) -> str:
@@ -134,7 +176,8 @@ def format_report(work_set: WorkSet) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     """Standalone entrypoint: `show` (default) prints the work set; `import-products`/
-    `import-regions <file>` upsert from a JSON file."""
+    `import-regions [file]` upsert from an explicit JSON file, or — with `file` omitted —
+    through the configured source (`settings.io_config_path`, ADR-0010)."""
     import asyncio
 
     parser = argparse.ArgumentParser(
@@ -143,16 +186,24 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="action")
     subparsers.add_parser("show", help="Print the active (product x region) work set (default)")
     import_products_parser = subparsers.add_parser("import-products", help="Upsert products from a JSON file")
-    import_products_parser.add_argument("file", help="Path to a products JSON file")
+    import_products_parser.add_argument(
+        "file", nargs="?", default=None, help="Path to a products JSON file (default: configured source)"
+    )
     import_regions_parser = subparsers.add_parser("import-regions", help="Upsert regions from a JSON file")
-    import_regions_parser.add_argument("file", help="Path to a regions JSON file")
+    import_regions_parser.add_argument(
+        "file", nargs="?", default=None, help="Path to a regions JSON file (default: configured source)"
+    )
 
     args = parser.parse_args(argv)
 
     if args.action == "import-products":
-        return asyncio.run(import_products(args.file))
+        if args.file:
+            return asyncio.run(import_products(args.file))
+        return asyncio.run(import_products_from_source())
     if args.action == "import-regions":
-        return asyncio.run(import_regions(args.file))
+        if args.file:
+            return asyncio.run(import_regions(args.file))
+        return asyncio.run(import_regions_from_source())
 
     work_set = asyncio.run(run())
     print(format_report(work_set))

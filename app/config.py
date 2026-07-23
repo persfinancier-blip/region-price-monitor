@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     storage_backend: str = "local"
     local_state_dir: str = "data/state"
+    io_config_path: str = "config/io.json"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/region_price_monitor"
     schedule_cron: str = "0 */6 * * *"
     max_concurrency: int = 5
