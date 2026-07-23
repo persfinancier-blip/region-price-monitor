@@ -8,6 +8,7 @@ real values for downstream scripts).
 """
 
 import argparse
+import json
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
@@ -74,6 +75,51 @@ async def run(session_factory: SessionFactory = get_session, settings: Settings 
     return WorkSet(pairs=pairs, cities=cities)
 
 
+async def import_products(path: str, *, session_factory: SessionFactory = get_session) -> int:
+    """Upsert products from a JSON file; print `imported <n> / updated <n>`."""
+    with open(path, encoding="utf-8") as fh:
+        items = json.load(fh)
+
+    imported = 0
+    updated = 0
+    async with session_factory() as session:
+        repo = ProductRepository(session)
+        existing_keys = {(p.marketplace, p.sku) for p in await repo.list_active()}
+        for item in items:
+            marketplace = Marketplace(item["marketplace"])
+            await repo.upsert(marketplace=marketplace, sku=item["sku"], url=item["url"], name=item["name"])
+            if (marketplace, item["sku"]) in existing_keys:
+                updated += 1
+            else:
+                imported += 1
+        await session.commit()
+
+    print(f"imported {imported} / updated {updated}")
+    return 0
+
+
+async def import_regions(path: str, *, session_factory: SessionFactory = get_session) -> int:
+    """Upsert regions from a JSON file; print `imported <n> / updated <n>`."""
+    with open(path, encoding="utf-8") as fh:
+        items = json.load(fh)
+
+    imported = 0
+    updated = 0
+    async with session_factory() as session:
+        repo = RegionRepository(session)
+        existing_codes = {r.code for r in await repo.list_active()}
+        for item in items:
+            await repo.upsert(code=item["code"], name=item["name"], geo=item["geo"])
+            if item["code"] in existing_codes:
+                updated += 1
+            else:
+                imported += 1
+        await session.commit()
+
+    print(f"imported {imported} / updated {updated}")
+    return 0
+
+
 def format_report(work_set: WorkSet) -> str:
     """Render the active cities + settings, proxy refs masked."""
     lines = [f"active pairs: {len(work_set.pairs)}"]
@@ -85,13 +131,26 @@ def format_report(work_set: WorkSet) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Standalone entrypoint: print the active work set (proxy refs masked)."""
+    """Standalone entrypoint: `show` (default) prints the work set; `import-products`/
+    `import-regions <file>` upsert from a JSON file."""
     import asyncio
 
     parser = argparse.ArgumentParser(
         prog="app.scripts.control_panel", description="Print the active (product x region) work set"
     )
-    parser.parse_args(argv)
+    subparsers = parser.add_subparsers(dest="action")
+    subparsers.add_parser("show", help="Print the active (product x region) work set (default)")
+    import_products_parser = subparsers.add_parser("import-products", help="Upsert products from a JSON file")
+    import_products_parser.add_argument("file", help="Path to a products JSON file")
+    import_regions_parser = subparsers.add_parser("import-regions", help="Upsert regions from a JSON file")
+    import_regions_parser.add_argument("file", help="Path to a regions JSON file")
+
+    args = parser.parse_args(argv)
+
+    if args.action == "import-products":
+        return asyncio.run(import_products(args.file))
+    if args.action == "import-regions":
+        return asyncio.run(import_regions(args.file))
 
     work_set = asyncio.run(run())
     print(format_report(work_set))

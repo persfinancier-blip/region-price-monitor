@@ -7,6 +7,7 @@ resolved parameters with secrets/credentials masked.
 """
 
 import argparse
+import sys
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
@@ -39,6 +40,22 @@ def run() -> Parameters:
     )
 
 
+async def healthcheck() -> int:
+    """Verify DB connectivity; print `OK`/exit 0, or a failure message/exit 1."""
+    from app.db import healthcheck as db_healthcheck
+
+    try:
+        ok = await db_healthcheck()
+    except Exception as exc:  # noqa: BLE001 — surface any connectivity failure to the operator
+        print(f"DB healthcheck FAILED: {exc}", file=sys.stderr)
+        return 1
+    if ok:
+        print("OK")
+        return 0
+    print("DB healthcheck FAILED: unexpected result", file=sys.stderr)
+    return 1
+
+
 def _masked_proxy_url(proxy_url: str | None) -> str | None:
     return None if proxy_url is None else _MASK
 
@@ -62,9 +79,16 @@ def format_report(params: Parameters) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Standalone entrypoint: resolve and print parameters with secrets masked."""
+    """Standalone entrypoint: default prints resolved parameters (secrets masked);
+    `--check` verifies DB connectivity instead."""
+    import asyncio
+
     parser = argparse.ArgumentParser(prog="app.scripts.parameters", description="Print resolved parameters")
-    parser.parse_args(argv)
+    parser.add_argument("--check", action="store_true", help="Verify DB connectivity instead")
+    args = parser.parse_args(argv)
+
+    if args.check:
+        return asyncio.run(healthcheck())
 
     params = run()
     print(format_report(params))

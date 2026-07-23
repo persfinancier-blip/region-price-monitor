@@ -92,32 +92,57 @@ class TaskQueue(Protocol):
 
 ## Скрипты и оболочка (ADR-0008)
 
-Исполняемая логика разложена на самостоятельные модули `app/scripts/*` — каждый работает и
-отдельно (`python -m app.scripts.<name>`), и под управлением тонкой оболочки:
+Исполняемая логика полностью разложена на самостоятельные модули `app/scripts/*` — каждый
+работает headless сам по себе (`python -m app.scripts.<name> …`) и не зависит от `app/cli.py`;
+оболочка — необязательное удобство, а не зависимость:
 
 - **`parameters`** — резолвит `Settings` + фабрику сессий + адреса (WB card URL, Ozon API URL,
   `COOKIE_STORE_DIR`) в один типизированный снэпшот `Parameters`; печатает их с маской на секретах.
+  `--check` вместо этого проверяет доступность БД (`app.db.healthcheck`) и возвращает её код выхода.
 - **`control_panel`** — активный набор «товар × регион» (то же правило, что и
   `_active_pairs`: WB — все активные регионы, Ozon — только с `ozon` в `geo`) + настройки по
-  городу (прокси-ref маскируется только в печатном выводе).
+  городу (прокси-ref маскируется только в печатном выводе). Подкоманды `import-products <file>` /
+  `import-regions <file>` заливают справочники из JSON (upsert); без подкоманды (или `show`) —
+  печатает активный рабочий набор.
 - **`health`** — здоровье прокси (`ProxyHealthService`) и свежесть кук Ozon (`is_stale`); при
-  `--fix`/`fix=True` протухшие куки перегреваются через `warm_if_stale`.
+  `--fix`/`fix=True` протухшие куки перегреваются через `warm_if_stale`. Подкоманда
+  `warm [--region …]` прогревает куки Ozon для одного или всех регионов напрямую.
 - **`wb` / `ozon`** — замер одной или всех активных пар через `measure_pair`; воспроизводят
   прежнее поведение `measure-wb`/`measure-ozon` (включая интерактивный прогрев кук Ozon и путь
   «нужен прогрев — пропущено» вне интерактивного режима) один в один.
+- **`report`** — печатает метрики прогона (`--run <id>` или `--last`): человекочитаемая строка +
+  Prometheus-текст (`app/obs/metrics.py`), плюс структурный лог `metrics`. Назван `report`, чтобы
+  не конфликтовать с `app/obs/metrics.py`.
 - **`orchestrator`** — собирает пайплайн `parameters → control_panel → health → run_once`:
   небольшая `Step`/`Pipeline`-структура в коде исполняет шаги в порядке зависимостей
   (топологическая сортировка), но сам замер (очередь/пул воркеров/ретраи/алерт) не
   переизобретает — вызывает существующий `app.scheduler.runner.run_once`. Этот шов рассчитан
   на то, что в Фазе 8 жёстко зашитый список шагов можно будет заменить YAML/JSON-описанием
   без изменения самих скриптов — редактор скриптов панели (SPEC-panel §6) станет
-  конструктором такого пайплайна.
+  конструктором такого пайплайна. Подкоманда `serve` запускает cron-демон (APScheduler),
+  планирующий `orchestrator.run(mode=RunMode.SCHEDULED)` — тот же пайплайн, что и разовый
+  прогон; без подкоманды — один проход пайплайна (эквивалент `run-once`).
 
-`app/cli.py` — тонкая оболочка: каждая подкоманда (`healthcheck`, `import-products`,
-`import-regions`, `measure-wb`, `measure-ozon`, `warm-ozon`, `run-once`, `serve`, `metrics`)
-только парсит аргументы и форматирует вывод, делегируя реальную работу скрипту; `serve`
-планирует вызов `orchestrator.run(mode=RunMode.SCHEDULED)` через `Scheduler`. Никакой бизнес-
-логики в `cli.py` не осталось.
+### Соответствие команда ↔ скрипт
+
+| Команда CLI      | Скрипт                             | Отдельный запуск                                           |
+|-------------------|-------------------------------------|-------------------------------------------------------------|
+| `healthcheck`     | `app.scripts.parameters`           | `python -m app.scripts.parameters --check`                  |
+| `import-products` | `app.scripts.control_panel`        | `python -m app.scripts.control_panel import-products <file>`|
+| `import-regions`  | `app.scripts.control_panel`        | `python -m app.scripts.control_panel import-regions <file>` |
+| `measure-wb`      | `app.scripts.wb`                   | `python -m app.scripts.wb [--region …] [--sku …]`            |
+| `measure-ozon`    | `app.scripts.ozon`                 | `python -m app.scripts.ozon [--region …] [--sku …]`          |
+| `warm-ozon`       | `app.scripts.health`               | `python -m app.scripts.health warm [--region …]`             |
+| `run-once`        | `app.scripts.orchestrator`         | `python -m app.scripts.orchestrator`                         |
+| `serve`           | `app.scripts.orchestrator`         | `python -m app.scripts.orchestrator serve`                  |
+| `metrics`         | `app.scripts.report`               | `python -m app.scripts.report --run <id> \| --last`          |
+
+`app/cli.py` — **чистый диспетчер**: импортирует только argparse/asyncio, `configure_logging` и
+`app.scripts.*`; каждая подкоманда — однострочная делегация в скрипт (парсинг аргументов +
+форматирование вывода, без обращений к репозиториям/провайдерам/сессиям/коллекторам напрямую).
+Команды/флаги/вывод/коды выхода не изменились — `docker-compose.prod.yml`/`Makefile`/entrypoint
+продолжают работать без правок. Владелец может не использовать оболочку вовсе — любой скрипт
+запускается автономно.
 
 ## Конфигурация и секреты
 

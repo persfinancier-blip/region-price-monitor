@@ -1,5 +1,7 @@
 """app.scripts.parameters — unit tests, no network/DB (secrets masked in output)."""
 
+from unittest.mock import patch
+
 from app.config import Settings
 from app.scripts import parameters
 
@@ -49,3 +51,30 @@ def test_main_prints_report(capsys) -> None:
     assert exit_code == 0
     captured = capsys.readouterr()
     assert "wb_card_url=" in captured.out
+
+
+async def test_healthcheck_ok_prints_ok(capsys) -> None:
+    with patch("app.db.healthcheck", return_value=True):
+        result = await parameters.healthcheck()
+
+    assert result == 0
+    assert "OK" in capsys.readouterr().out
+
+
+async def test_healthcheck_failure_exits_1(capsys) -> None:
+    with patch("app.db.healthcheck", return_value=False):
+        result = await parameters.healthcheck()
+
+    assert result == 1
+    assert "FAILED" in capsys.readouterr().err
+
+
+def test_main_check_dispatches_to_healthcheck() -> None:
+    async def _ok():
+        return 0
+
+    with patch.object(parameters, "healthcheck", side_effect=_ok) as mock_healthcheck:
+        result = parameters.main(["--check"])
+
+    assert result == 0
+    mock_healthcheck.assert_called_once_with()

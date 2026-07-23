@@ -139,3 +139,69 @@ def test_main_help_smoke() -> None:
     with pytest.raises(SystemExit) as exc_info:
         health.main(["--help"])
     assert exc_info.value.code == 0
+
+
+class _FakeLease:
+    def __init__(self, proxy_url: str | None) -> None:
+        self.proxy_url = proxy_url
+
+
+class _FakeProvider:
+    def __init__(self) -> None:
+        self.acquired: list[str] = []
+
+    async def acquire(self, region_code: str) -> _FakeLease:
+        self.acquired.append(region_code)
+        return _FakeLease(proxy_url=None)
+
+
+async def test_warm_warms_all_ozon_regions_by_default(capsys) -> None:
+    msk = _FakeRegion("msk", geo={"ozon": {"city": "Moscow"}})
+    spb = _FakeRegion("spb", geo={})  # no ozon geo — excluded from default
+    warmer = _FakeWarmer()
+    provider = _FakeProvider()
+
+    async def list_active_regions(self):
+        return [msk, spb]
+
+    with patch.object(RegionRepository, "list_active", list_active_regions, autospec=False):
+        result = await health.warm(
+            None,
+            session_factory=_fake_session,
+            cookie_store=_FakeCookieStore(bundle=None),
+            provider=provider,
+            warmer=warmer,
+        )
+
+    assert result == 0
+    assert warmer.warmed == [(Marketplace.OZON, "msk")]
+    assert "region=msk: warmed" in capsys.readouterr().out
+
+
+async def test_warm_unknown_region_exits_1() -> None:
+    async def get_by_code(self, code: str):
+        return None
+
+    with patch.object(RegionRepository, "get_by_code", get_by_code, autospec=False):
+        result = await health.warm(
+            ["nowhere"],
+            session_factory=_fake_session,
+            cookie_store=_FakeCookieStore(bundle=None),
+            provider=_FakeProvider(),
+            warmer=_FakeWarmer(),
+        )
+
+    assert result == 1
+
+
+def test_main_dispatches_warm() -> None:
+    with patch.object(health, "warm") as mock_warm:
+
+        async def _noop(*args, **kwargs):
+            return 0
+
+        mock_warm.side_effect = _noop
+        result = health.main(["warm", "--region", "msk"])
+
+    assert result == 0
+    mock_warm.assert_called_once_with(["msk"])
