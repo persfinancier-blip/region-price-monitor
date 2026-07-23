@@ -17,6 +17,8 @@ from app.config import Settings
 from app.cookies.base import CookieStore
 from app.cookies.fs import make_cookie_store
 from app.enums import Marketplace, Outcome, QueueStatus, RunMode, RunStatus
+from app.obs.alerts import Alert, make_alerter, should_alert
+from app.obs.metrics import RunMetrics, compute_run_metrics
 from app.proxy.base import ProxyProvider
 from app.proxy.static import make_proxy_provider
 from app.queue.base import Pair, QueueItem
@@ -42,6 +44,7 @@ class RunSummary:
 
     run_id: int
     stats: dict[str, int]
+    metrics: RunMetrics | None = None
 
 
 async def _active_pairs(
@@ -184,6 +187,8 @@ async def run_once(
         await session.commit()
         run_id = run.id
 
+    logger.info("run.started", extra={"run_id": run_id, "mode": mode.value, "pairs": len(pairs)})
+
     stats: dict[str, int] = {}
     stats_lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(settings.max_concurrency)
@@ -201,7 +206,41 @@ async def run_once(
             await run_repo.finish(finished_run, RunStatus.DONE, stats)
         await session.commit()
 
-    return RunSummary(run_id=run_id, stats=stats)
+    async with session_factory() as session:
+        metrics = await compute_run_metrics(session, run_id)
+
+    logger.info(
+        "run.finished",
+        extra={
+            "run_id": run_id,
+            "total": metrics.total,
+            "success_rate": metrics.success_rate,
+            "ban_rate": metrics.ban_rate,
+            "error_rate": metrics.error_rate,
+            "avg_duration_ms": metrics.avg_duration_ms,
+            "attempts_per_success": metrics.attempts_per_success,
+        },
+    )
+
+    try:
+        alerter = make_alerter(settings)
+        if should_alert(metrics, settings.success_rate_threshold, settings.alert_min_measures):
+            await alerter.send(
+                Alert(
+                    kind="success_rate_below_threshold",
+                    run_id=run_id,
+                    success_rate=metrics.success_rate,
+                    threshold=settings.success_rate_threshold,
+                    message=(
+                        f"run {run_id}: success_rate={metrics.success_rate:.3f} "
+                        f"below threshold={settings.success_rate_threshold}"
+                    ),
+                )
+            )
+    except Exception:  # noqa: BLE001 — alerting is best-effort, never fails the run
+        logger.exception("alert delivery failed", extra={"run_id": run_id})
+
+    return RunSummary(run_id=run_id, stats=stats, metrics=metrics)
 
 
 class Scheduler:
