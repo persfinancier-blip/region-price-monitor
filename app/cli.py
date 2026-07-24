@@ -104,8 +104,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cookies_parser = subparsers.add_parser("cookies", help="Manage cookie bundles")
     cookies_sub = cookies_parser.add_subparsers(dest="cookies_action", required=True)
-    cookies_collect = cookies_sub.add_parser("collect", help="Login-once + auto city-walk collect")
+    cookies_collect = cookies_sub.add_parser("collect", help="Guided walk: cities with no remembered address")
     cookies_collect.add_argument("marketplace", choices=["wb", "ozon"])
+    cookies_collect.add_argument("--force", action="store_true", help="Re-capture every city")
+    cookies_refresh = cookies_sub.add_parser("refresh", help="Auto-repair stale cities by remembered address")
+    cookies_refresh.add_argument("marketplace", choices=["wb", "ozon"])
     cookies_status = cookies_sub.add_parser("status", help="Print health for stored bundles")
     cookies_status.add_argument("marketplace", nargs="?", choices=["wb", "ozon"], default=None)
     cookies_set = cookies_sub.add_parser("set-manual", help="Paste a cookie bundle from a JSON file")
@@ -170,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "cookies":
         cookies_argv = [args.cookies_action]
         if args.cookies_action == "collect":
+            cookies_argv += [args.marketplace]
+            if args.force:
+                cookies_argv += ["--force"]
+        elif args.cookies_action == "refresh":
             cookies_argv += [args.marketplace]
         elif args.cookies_action == "status":
             if args.marketplace:

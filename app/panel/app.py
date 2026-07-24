@@ -4,9 +4,10 @@ Dashboard reads go through `app/panel/queries.py`, `app.obs.metrics`, and
 `app.scripts.control_panel.run`. "Run now" delegates to `app.scripts.orchestrator.run`
 as a background task, guarded against overlaps by a simple in-process flag.
 
-The «Куки» tab (ADR-0012) delegates to `app/scripts/cookies.py`; its collect job runs
-`warm_all` (a sync Playwright call) on a worker thread so it doesn't block the event
-loop, with per-marketplace progress tracked in `_cookie_jobs` for the polling `status` view.
+The «Куки» tab (ADR-0012, revised ADR-0013) delegates to `app/scripts/cookies.py`; collect
+(guided) and refresh (auto-repair by remembered Ozon address) jobs run `warm_all` (a sync
+Playwright call) on a worker thread so they don't block the event loop, with per-marketplace
+progress tracked in `_cookie_jobs` for the polling `status` view.
 """
 
 import json
@@ -188,15 +189,31 @@ def create_app() -> FastAPI:
             message = "Сбор уже выполняется"
         return HTMLResponse(f'<p id="collect-status-{mp}">{message}</p>')
 
+    @app.post("/cookies/{mp}/refresh")
+    async def refresh_cookies(mp: str, background_tasks: BackgroundTasks) -> HTMLResponse:
+        marketplace = Marketplace(mp)
+        job = _cookie_jobs[marketplace]
+        if not job.running:
+            job.reset()
+            background_tasks.add_task(_refresh_and_release, marketplace, job)
+            message = "Обновление запущено"
+        else:
+            message = "Сбор уже выполняется"
+        return HTMLResponse(f'<p id="collect-status-{mp}">{message}</p>')
+
     @app.get("/cookies/status")
     async def cookies_status() -> dict[str, Any]:
         return {mp.value: {"running": job.running, "steps": job.steps} for mp, job in _cookie_jobs.items()}
 
     @app.post("/cookies/{mp}/{city}")
-    async def set_manual_cookie(mp: str, city: str, raw: str = Form(...)) -> RedirectResponse:
+    async def set_manual_cookie(
+        mp: str, city: str, raw: str = Form(...), address_label: str = Form("")
+    ) -> RedirectResponse:
         marketplace = Marketplace(mp)
         storage_state = json.loads(raw) if raw else {}
-        cookies_script.set_manual(marketplace, city, storage_state, settings=get_settings())
+        cookies_script.set_manual(
+            marketplace, city, storage_state, settings=get_settings(), address_label=address_label or None
+        )
         return RedirectResponse("/tab/cookies", status_code=303)
 
     @app.post("/cookies/{mp}/{city}/clear")
@@ -228,6 +245,13 @@ async def _run_and_release() -> None:
 async def _collect_and_release(marketplace: Marketplace, job: "_CollectJob") -> None:
     try:
         await cookies_script.collect(marketplace, cancel=job, on_progress=job.on_progress)
+    finally:
+        job.running = False
+
+
+async def _refresh_and_release(marketplace: Marketplace, job: "_CollectJob") -> None:
+    try:
+        await cookies_script.refresh(marketplace, cancel=job, on_progress=job.on_progress)
     finally:
         job.running = False
 

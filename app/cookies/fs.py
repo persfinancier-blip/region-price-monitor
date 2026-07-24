@@ -37,6 +37,7 @@ class FsCookieStore:
             warmed_at=datetime.datetime.fromisoformat(data["warmed_at"]),
             stale=data.get("stale", False),
             source_ref=data.get("source_ref"),
+            address_label=data.get("address_label"),
         )
 
     def save(self, bundle: CookieBundle) -> None:
@@ -49,6 +50,7 @@ class FsCookieStore:
             "warmed_at": bundle.warmed_at.isoformat(),
             "stale": bundle.stale,
             "source_ref": bundle.source_ref,
+            "address_label": bundle.address_label,
         }
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
@@ -71,6 +73,7 @@ class FsCookieStore:
                 warmed_at=bundle.warmed_at,
                 stale=True,
                 source_ref=bundle.source_ref,
+                address_label=bundle.address_label,
             )
         )
 

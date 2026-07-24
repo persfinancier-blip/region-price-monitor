@@ -21,6 +21,11 @@ class CookieBundle:
     warmed_at: datetime.datetime
     stale: bool = False
     source_ref: str | None = None
+    address_label: str | None = None
+    """The operator-chosen Ozon delivery address remembered for this city (ADR-0013).
+
+    `None` for WB's `_session` bundle and for any bundle warmed before this field existed.
+    """
 
 
 class CookieStore(Protocol):

@@ -1,10 +1,12 @@
-"""`cookies` script — one-button collect + health + manual control (ADR-0008, ADR-0012).
+"""`cookies` script — one-button collect + health + manual control (ADR-0008, ADR-0012/0013).
 
 Thin wrapper over `app.cookies.warm.warm_all` and `FsCookieStore`: `collect(marketplace)`
-walks the local cities store's effective cities (Ozon per-city, WB single session);
-`status()` reports stored bundles with health (valid / expiring / stale via `is_stale`);
-`set_manual`/`clear` let the operator paste/edit/drop a cookie by hand. No business logic
-in the panel routes — they call straight through here.
+guided-walks cities with no remembered Ozon address (WB single session, unchanged);
+`refresh(marketplace)` auto-repairs cities whose cookie is stale and that already have a
+remembered address; `status()` reports stored bundles with health (valid / expiring / stale
+via `is_stale`) plus the remembered `address_label` for Ozon; `set_manual`/`clear` let the
+operator paste/edit/drop a cookie by hand. No business logic in the panel routes — they call
+straight through here.
 """
 
 import argparse
@@ -30,6 +32,7 @@ class CookieHealth:
     warmed_at: datetime.datetime | None
     age_hours: float | None
     status: str  # "valid" | "expiring" | "stale" | "missing"
+    address_label: str | None = None
 
 
 _EXPIRING_FRACTION = 0.25
@@ -47,14 +50,29 @@ def _health_status(bundle: CookieBundle | None, ttl_hours: int) -> str:
     return "valid"
 
 
-def _walk_cities(effective: list[cities_store.EffectiveCity], marketplace: Marketplace) -> list[WalkCity]:
+def _walk_cities(
+    effective: list[cities_store.EffectiveCity],
+    marketplace: Marketplace,
+    *,
+    store: CookieStore,
+) -> list[WalkCity]:
     mp_key = marketplace.value
     walk = []
     for city in effective:
         eff_mp = city.marketplaces.get(mp_key)
         if eff_mp is None:
             continue
-        walk.append(WalkCity(code=city.code, name=city.name, geo=city.geo, proxy_url=eff_mp.proxy))
+        bundle = store.load(marketplace, city.code)
+        address_label = bundle.address_label if bundle is not None else None
+        walk.append(
+            WalkCity(
+                code=city.code,
+                name=city.name,
+                geo=city.geo,
+                proxy_url=eff_mp.proxy,
+                address_label=address_label,
+            )
+        )
     return walk
 
 
@@ -65,17 +83,57 @@ async def collect(
     store: CookieStore | None = None,
     cancel: CancelToken | None = None,
     on_progress: ProgressReporter | None = None,
+    force: bool = False,
 ) -> list[str]:
-    """Run `warm_all` over the cities store's effective cities for `marketplace`.
+    """Guided walk: run `warm_all` over cities with no remembered address (or all, if `force`).
 
-    Returns the list of city codes (or `_session` for WB) the walk reported on, in order.
+    WB is unchanged — always a single `_session` pass. Ozon cities that already have a
+    remembered `address_label` are skipped here (`refresh` auto-repairs those instead), unless
+    `force` re-captures every city. Returns the city codes (or `_session` for WB) walked, in order.
     """
     settings = settings or get_settings()
     store = store or make_cookie_store(settings)
 
     config = await cities_store.load(settings)
     effective = cities_store.list_effective(config)
-    walk_cities = _walk_cities(effective, marketplace)
+    walk_cities = _walk_cities(effective, marketplace, store=store)
+    if marketplace is Marketplace.OZON and not force:
+        walk_cities = [c for c in walk_cities if not c.address_label]
+
+    results = await asyncio.to_thread(
+        warm_all, store, marketplace, walk_cities, cancel=cancel, on_progress=on_progress
+    )
+    return [r.city_code for r in results]
+
+
+async def refresh(
+    marketplace: Marketplace,
+    *,
+    settings: Settings | None = None,
+    store: CookieStore | None = None,
+    cancel: CancelToken | None = None,
+    on_progress: ProgressReporter | None = None,
+) -> list[str]:
+    """Auto-repair: re-warm stale cities that already have a remembered address.
+
+    Cities with no remembered address are left alone (guided `collect` handles those) — this
+    never guesses a mapping. WB is unchanged — always a single `_session` pass.
+    """
+    settings = settings or get_settings()
+    store = store or make_cookie_store(settings)
+
+    config = await cities_store.load(settings)
+    effective = cities_store.list_effective(config)
+    walk_cities = _walk_cities(effective, marketplace, store=store)
+    if marketplace is Marketplace.OZON:
+        stale_with_address = []
+        for city in walk_cities:
+            if not city.address_label:
+                continue
+            bundle = store.load(marketplace, city.code)
+            if bundle is not None and is_stale(bundle, settings.ozon_cookie_ttl_hours):
+                stale_with_address.append(city)
+        walk_cities = stale_with_address
 
     results = await asyncio.to_thread(
         warm_all, store, marketplace, walk_cities, cancel=cancel, on_progress=on_progress
@@ -117,6 +175,7 @@ async def status(
                     warmed_at=bundle.warmed_at,
                     age_hours=age_hours,
                     status=_health_status(bundle, settings.ozon_cookie_ttl_hours),
+                    address_label=bundle.address_label,
                 )
             )
     return reports
@@ -129,6 +188,7 @@ def set_manual(
     *,
     settings: Settings | None = None,
     store: CookieStore | None = None,
+    address_label: str | None = None,
 ) -> None:
     """Paste/edit a cookie bundle by hand — same shape `warm_all` would have saved."""
     settings = settings or get_settings()
@@ -141,6 +201,7 @@ def set_manual(
             warmed_at=datetime.datetime.now(datetime.UTC),
             stale=False,
             source_ref="manual",
+            address_label=address_label,
         )
     )
 
@@ -165,17 +226,22 @@ def format_status(reports: list[CookieHealth]) -> str:
     lines = []
     for r in reports:
         age = f"{r.age_hours:.1f}h" if r.age_hours is not None else "—"
-        lines.append(f"  {r.marketplace}/{r.region_code}: status={r.status} age={age}")
+        label = f" address={r.address_label}" if r.address_label else ""
+        lines.append(f"  {r.marketplace}/{r.region_code}: status={r.status} age={age}{label}")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Standalone entrypoint: `collect`/`status`/`set-manual`/`clear`, mirroring the CLI verb."""
+    """Standalone entrypoint: `collect`/`refresh`/`status`/`set-manual`/`clear`, mirroring the CLI verb."""
     parser = argparse.ArgumentParser(prog="app.scripts.cookies", description="Manage cookie bundles")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
-    collect_parser = subparsers.add_parser("collect", help="Login-once + auto city-walk collect")
+    collect_parser = subparsers.add_parser("collect", help="Guided walk: cities with no remembered address")
     collect_parser.add_argument("marketplace", choices=["wb", "ozon"])
+    collect_parser.add_argument("--force", action="store_true", help="Re-capture every city")
+
+    refresh_parser = subparsers.add_parser("refresh", help="Auto-repair stale cities by remembered address")
+    refresh_parser.add_argument("marketplace", choices=["wb", "ozon"])
 
     status_parser = subparsers.add_parser("status", help="Print health for stored bundles")
     status_parser.add_argument("marketplace", nargs="?", choices=["wb", "ozon"], default=None)
@@ -192,8 +258,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.action == "collect":
-        codes = asyncio.run(collect(Marketplace(args.marketplace)))
+        codes = asyncio.run(collect(Marketplace(args.marketplace), force=args.force))
         print(f"collected: {', '.join(codes) or '(none)'}")
+        return 0
+    if args.action == "refresh":
+        codes = asyncio.run(refresh(Marketplace(args.marketplace)))
+        print(f"refreshed: {', '.join(codes) or '(none)'}")
         return 0
     if args.action == "status":
         mp = Marketplace(args.marketplace) if args.marketplace else None
