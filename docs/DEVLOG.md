@@ -541,3 +541,43 @@
 - **Не делали в этом слайсе:** маппинг свободное-имя → канонический адрес Ozon (это и был баг);
   headless/серверная авто-починка (SPEC §9.2, открытый вопрос); шифрование кук/адресов;
   изменения в коллекторах WB/Ozon, парсере, прокси-слое, storage/IO seam, схеме стора городов.
+
+## 2026-07-24 — Вкладка «Параметры подключения» (`prompt-17-connection-tab`)
+
+- **UI поверх I/O-бэкенда** (ADR-0010, `prompt-13`): реальная вкладка «Параметры подключения»
+  (SPEC-panel §5, Фаза 8.4), единственная точка ввода `config/io.json`. Оформлено в
+  [ADR-0014](adr/0014-connection-tab.md).
+- `app/scripts/connection.py` (новый, тонкий скрипт ADR-0008): `load`/`save` — атомарный
+  раунд-трип `io.json`; `columns(endpoint, table=...)` — читает фактический заголовок
+  csv/xlsx/db-таблицы для ещё не сохранённого endpoint (нет файла/таблицы ⇒ пустой список, не
+  падение); `validate_source`/`validate_sink` — собирают все нарушения маппинга (не бросают);
+  `preview_source` — первые N строк products/regions через новый публичный
+  `app/io/factory.build_product_source`; `mask_database_url`/`resolve_database_url` — маска
+  пароля + «пустой пароль на сохранении = оставить прежний» (тот же паттерн, что
+  `cities.py::mask_proxy`/`keep_proxy_if_empty`).
+- `app/io/factory.py` — добавлены публичные `build_product_source`/`build_result_sink`
+  (обёртки над существующими `_build_*`), чтобы панель могла превью/валидировать
+  несохранённый endpoint из формы. `make_*` не изменились.
+- `app/panel/app.py` + `templates/connection.html`/`_connection_preview.html` — `GET
+  /tab/connection` (четыре вертикальные закладки §5.1–5.4, предзаполнены из `io.json`,
+  `database_url` маскирован), `POST /connection/{source,sink}` (сохраняют секцию),
+  `POST /connection/preview` (валидация+предпросмотр посланного, необязательно
+  сохранённого конфига). Поля маппинга — из `app/io/base.py`
+  (`PRODUCT_FIELDS`/`REGION_FIELDS`/`RESULT_FIELDS`), обязательные помечены `*`. `connection`
+  убран из `_PLACEHOLDER_TABS`.
+- CLI: `region-price-monitor connection {show,validate,preview}`.
+- **Ручная проверка** (`STORAGE_BACKEND=local`): xlsx-источник с валидным маппингом → превью
+  показывает канонические строки; тот же маппинг с намеренно неверной колонкой → флажок
+  «locators absent from source header»; csv-сток + маппинг результатов сохранены; `python -m
+  app.scripts.export --preview` после сохранения не падает (пустой local-стор → нет строк, чисто).
+- **Тесты**: `tests/test_connection_script.py` (13, round-trip, validate missing/shifted,
+  preview csv+xlsx, columns, mask/resolve database_url, `build_*` совпадает с `make_*`),
+  `tests/test_connection_script_db.py` (db-путь, за гейтом `TEST_DATABASE_URL`),
+  `tests/test_panel_connection.py` (6, рендер пустой/предзаполненной формы, `POST
+  /connection/{source,sink}` персистят, превью возвращает маппленные строки и флагует сдвиг).
+  `tests/test_panel_placeholders.py` обновлён — `connection` больше не заглушка. DoD-гейт
+  зелёный: 222 passed / 12 skipped.
+- **Не делали в этом слайсе:** мастер настройки; изменения поведения адаптеров (только
+  публичные `build_*`); хранилище секретов (`database_url` по-прежнему открытым текстом в
+  `io.json`, маскируется только при отображении); другие вкладки (редактор скриптов, логи);
+  общий профиль по умолчанию; новые канонические поля сверх `app/io/base.py`.

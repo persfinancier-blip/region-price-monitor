@@ -31,6 +31,16 @@ def make_result_sink(settings: Settings) -> ResultSink | None:
     return _build_result_sink(config.sink)
 
 
+def build_product_source(endpoint: EndpointConfig) -> ProductSource:
+    """Public wrapper: build a `ProductSource` for an endpoint that isn't (yet) saved to `io.json`."""
+    return _build_product_source(endpoint)
+
+
+def build_result_sink(endpoint: EndpointConfig) -> ResultSink:
+    """Public wrapper: build a `ResultSink` for an endpoint that isn't (yet) saved to `io.json`."""
+    return _build_result_sink(endpoint)
+
+
 def _build_product_source(endpoint: EndpointConfig) -> ProductSource:
     if endpoint.kind == "json":
         from app.io.json_source import JsonProductSource

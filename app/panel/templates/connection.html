@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Параметры подключения</h1>
+  <p class="muted">
+    Источник списка товаров/регионов и приёмник результатов — обычный локальный конфиг
+    (`io.json`), без хранилища секретов: пароль в строке подключения к БД показан
+    маскированным, пустое поле пароля при сохранении оставляет прежнее значение.
+  </p>
+
+  <nav class="conn-subtabs">
+    <a href="#source" class="conn-subtab conn-subtab--active">5.1 Источник</a>
+    <a href="#source-mapping" class="conn-subtab">5.2 Маппинг входа</a>
+    <a href="#sink" class="conn-subtab">5.3 Приёмник</a>
+    <a href="#sink-mapping" class="conn-subtab">5.4 Маппинг выхода</a>
+  </nav>
+</section>
+
+<section class="card" id="source">
+  <h2>5.1 Источник</h2>
+  <form id="source-form" method="post" action="/connection/source">
+    <label>
+      Тип:
+      <select name="kind">
+        {% for k in ["json", "csv", "xlsx", "db"] %}
+        <option value="{{ k }}" {% if source and source.kind == k %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    {% set src_params = source.params if source else {} %}
+    {% set src_xlsx_products = src_params.products if source and source.kind == "xlsx" else {} %}
+    {% set src_xlsx_regions = src_params.regions if source and source.kind == "xlsx" else {} %}
+
+    <fieldset>
+      <legend>Товары</legend>
+      <label>Путь: <input type="text" name="products_path"
+        value="{{ src_xlsx_products.path if source and source.kind == 'xlsx' else src_params.products_path or '' }}"></label>
+      <label>Лист: <input type="text" name="products_sheet" value="{{ src_xlsx_products.sheet or '' }}"></label>
+      <label>Диапазон: <input type="text" name="products_range" value="{{ src_xlsx_products.range or '' }}"></label>
+      <label>Таблица (БД): <input type="text" name="products_table" value="{{ src_params.products_table or '' }}"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Регионы</legend>
+      <label>Путь: <input type="text" name="regions_path"
+        value="{{ src_xlsx_regions.path if source and source.kind == 'xlsx' else src_params.regions_path or '' }}"></label>
+      <label>Лист: <input type="text" name="regions_sheet" value="{{ src_xlsx_regions.sheet or '' }}"></label>
+      <label>Диапазон: <input type="text" name="regions_range" value="{{ src_xlsx_regions.range or '' }}"></label>
+      <label>Таблица (БД): <input type="text" name="regions_table" value="{{ src_params.regions_table or '' }}"></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>База (при типе db)</legend>
+      <label>
+        Строка подключения:
+        <input type="text" name="database_url" placeholder="{{ src_params.database_url or '' }}">
+      </label>
+    </fieldset>
+
+    <div id="source-mapping">
+      <h2>5.2 Маппинг входа</h2>
+      <table>
+        <thead><tr><th>Наше поле</th><th>Колонка источника</th></tr></thead>
+        <tbody>
+          {% for field in product_fields %}
+          <tr>
+            <td>{{ field }}{% if field in required_product_fields %} *{% endif %}</td>
+            <td><input type="text" name="map_products__{{ field }}"
+              value="{{ (source.products or {}).get(field, '') if source else '' }}"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted">Регионы:</p>
+      <table>
+        <thead><tr><th>Наше поле</th><th>Колонка источника</th></tr></thead>
+        <tbody>
+          {% for field in region_fields %}
+          <tr>
+            <td>{{ field }}</td>
+            <td><input type="text" name="map_regions__{{ field }}"
+              value="{{ (source.regions or {}).get(field, '') if source else '' }}"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <button type="submit">Сохранить источник</button>
+    <button type="button" id="preview-source-button">Предпросмотр</button>
+  </form>
+
+  {% if source_errors %}
+  <ul class="conn-errors">
+    {% for err in source_errors %}<li>{{ err }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  <div id="source-preview"></div>
+</section>
+
+<section class="card" id="sink">
+  <h2>5.3 Приёмник</h2>
+  <form id="sink-form" method="post" action="/connection/sink">
+    <label>
+      Тип:
+      <select name="kind">
+        {% for k in ["json", "csv", "xlsx", "db"] %}
+        <option value="{{ k }}" {% if sink and sink.kind == k %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    {% set sink_params = sink.params if sink else {} %}
+    <label>Путь: <input type="text" name="path" value="{{ sink_params.path or '' }}"></label>
+    <label>Лист: <input type="text" name="sheet" value="{{ sink_params.sheet or '' }}"></label>
+    <label>Таблица (БД): <input type="text" name="results_table" value="{{ sink_params.results_table or '' }}"></label>
+    <label>
+      Строка подключения (БД):
+      <input type="text" name="database_url" placeholder="{{ sink_params.database_url or '' }}">
+    </label>
+
+    <div id="sink-mapping">
+      <h2>5.4 Маппинг выхода</h2>
+      <table>
+        <thead><tr><th>Наше поле</th><th>Колонка приёмника</th></tr></thead>
+        <tbody>
+          {% for field in result_fields %}
+          <tr>
+            <td>{{ field }}{% if field in required_result_fields %} *{% endif %}</td>
+            <td><input type="text" name="map_results__{{ field }}"
+              value="{{ (sink.results or {}).get(field, '') if sink else '' }}"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <button type="submit">Сохранить приёмник</button>
+    <button type="button" id="preview-sink-button">Предпросмотр</button>
+  </form>
+
+  {% if sink_errors %}
+  <ul class="conn-errors">
+    {% for err in sink_errors %}<li>{{ err }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  <div id="sink-preview"></div>
+</section>
+{% endblock %}
