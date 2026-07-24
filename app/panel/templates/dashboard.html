@@ -77,22 +77,73 @@
 </section>
 
 <section class="card">
-  <h2>Активные города</h2>
+  <h2>Города</h2>
+
+  <p class="muted">Общий профиль (по умолчанию для городов в режиме «Наследует общее»):</p>
   <table>
     <thead>
-      <tr><th>Регион</th><th>Прокси</th><th>Площадки</th></tr>
+      <tr><th>Площадка</th><th>Вкл</th><th>Прокси</th><th>Интервал, мин</th></tr>
     </thead>
     <tbody>
-      {% for city in cities %}
+      {% for mp in ["wb", "ozon"] %}
       <tr>
-        <td>{{ city.region.code }}</td>
-        <td>{{ "***" if city.proxy_ref else "—" }}</td>
-        <td>{{ city.marketplaces|map(attribute="value")|join(", ") or "—" }}</td>
+        <td>{{ mp }}</td>
+        <td>{{ "да" if defaults[mp].enabled else "нет" }}</td>
+        <td>{{ mask_proxy(defaults[mp].proxy) or "—" }}</td>
+        <td>{{ defaults[mp].interval_min }}</td>
       </tr>
-      {% else %}
-      <tr><td colspan="3" class="muted">Нет данных</td></tr>
       {% endfor %}
     </tbody>
   </table>
+
+  <h3>Настроенные города</h3>
+  {% for city in city_configs %}
+  <details class="city-block">
+    <summary>{{ city.name }} ({{ city.code }})</summary>
+
+    {% for mp in ["wb", "ozon"] %}
+    {% set override = city.wb if mp == "wb" else city.ozon %}
+    <form class="city-mp-form" method="post" action="/cities/{{ city.code }}/{{ mp }}">
+      <fieldset>
+        <legend>{{ mp }}</legend>
+        <label>
+          <input type="radio" name="mode" value="inherit" {% if override.mode == "inherit" %}checked{% endif %}>
+          Наследует общее
+        </label>
+        <label>
+          <input type="radio" name="mode" value="override" {% if override.mode == "override" %}checked{% endif %}>
+          Локально
+        </label>
+        <label>
+          Вкл: <input type="checkbox" name="enabled" value="true"
+            {% if override.mode == "override" and override.enabled %}checked{% endif %}>
+        </label>
+        <label>
+          Прокси: <input type="text" name="proxy" placeholder="{{ mask_proxy(override.proxy) or '—' }}">
+        </label>
+        <label>
+          Интервал, мин: <input type="number" name="interval_min"
+            value="{{ override.interval_min or defaults[mp].interval_min }}">
+        </label>
+        <button type="submit">Сохранить</button>
+      </fieldset>
+    </form>
+    {% endfor %}
+
+    <form method="post" action="/cities/{{ city.code }}/delete">
+      <button type="submit">Удалить город</button>
+    </form>
+  </details>
+  {% else %}
+  <p class="muted">Городов ещё нет.</p>
+  {% endfor %}
+
+  <h3>Добавить город</h3>
+  <form method="post" action="/cities">
+    <label>Код: <input type="text" name="code" required></label>
+    <label>Название: <input type="text" name="name" required></label>
+    <label>Ozon-регион (гео, опционально): <input type="text" name="geo_ozon"></label>
+    <button type="submit">Добавить</button>
+  </form>
 </section>
 {% endblock %}

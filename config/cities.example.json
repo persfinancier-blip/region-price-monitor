@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy to config/cities.json and edit. No file at settings.city_config_path => seeded once from the regions store + PROXY_MAP_JSON/intervals (ADR-0011).",
+
+  "defaults": {
+    "wb": { "enabled": true, "proxy": null, "interval_min": 360 },
+    "ozon": { "enabled": true, "proxy": null, "interval_min": 360 }
+  },
+
+  "cities": [
+    {
+      "code": "msk",
+      "name": "Москва",
+      "geo": { "ozon": "Moscow" },
+      "wb": { "mode": "inherit" },
+      "ozon": { "mode": "override", "enabled": true, "proxy": "http://user:pass@proxy.example:8080", "interval_min": 120 }
+    },
+    {
+      "code": "spb",
+      "name": "Санкт-Петербург",
+      "geo": {},
+      "wb": { "mode": "inherit" },
+      "ozon": { "mode": "override", "enabled": false, "proxy": null, "interval_min": 360 }
+    }
+  ]
+}

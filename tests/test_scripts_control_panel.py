@@ -18,10 +18,11 @@ class _FakeProduct:
 
 
 class _FakeRegion:
-    def __init__(self, id_: int, code: str, geo: dict) -> None:
+    def __init__(self, id_: int, code: str, geo: dict, name: str = "") -> None:
         self.id = id_
         self.code = code
         self.geo = geo
+        self.name = name or code
 
 
 class _FakeStorage:

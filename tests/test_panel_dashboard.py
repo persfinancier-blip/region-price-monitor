@@ -11,6 +11,7 @@ from app.enums import RunMode, RunStatus
 from app.obs.metrics import RunMetrics
 from app.panel import app as panel_app
 from app.panel.queries import LatestSnapshot
+from app.scripts import cities as cities_store
 from app.scripts import control_panel
 
 
@@ -82,6 +83,16 @@ async def _fake_control_panel_run(*args, **kwargs):
     )
 
 
+async def _fake_cities_load(*args, **kwargs):
+    return cities_store.CitiesConfig(
+        defaults={
+            "wb": cities_store.MarketplaceDefaults(enabled=True, proxy=None, interval_min=360),
+            "ozon": cities_store.MarketplaceDefaults(enabled=True, proxy=None, interval_min=360),
+        },
+        cities=[],
+    )
+
+
 def test_dashboard_renders_health_runs_prices_cities() -> None:
     with (
         patch("app.panel.app.make_storage", return_value=_fake_session),
@@ -89,6 +100,7 @@ def test_dashboard_renders_health_runs_prices_cities() -> None:
         patch("app.panel.app.queries.latest_snapshots", _fake_latest_snapshots),
         patch("app.panel.app.compute_run_metrics", _fake_compute_run_metrics),
         patch.object(control_panel, "run", _fake_control_panel_run),
+        patch.object(cities_store, "load", _fake_cities_load),
     ):
         response = _client().get("/")
 
@@ -106,6 +118,7 @@ def test_dashboard_masks_proxy_credentials() -> None:
         patch("app.panel.app.queries.latest_snapshots", _fake_latest_snapshots),
         patch("app.panel.app.compute_run_metrics", _fake_compute_run_metrics),
         patch.object(control_panel, "run", _fake_control_panel_run),
+        patch.object(cities_store, "load", _fake_cities_load),
     ):
         response = _client().get("/")
 

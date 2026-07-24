@@ -17,7 +17,7 @@ from app.enums import Marketplace
 from app.io.base import ProductSource
 from app.io.factory import make_product_source
 from app.models import Product, Region
-from app.proxy.static import parse_proxy_map
+from app.scripts import cities as cities_store
 from app.storage.factory import StorageFactory, make_storage
 
 _MASK = "***"
@@ -25,11 +25,13 @@ _MASK = "***"
 
 @dataclass(frozen=True)
 class CitySettings:
-    """Per-region settings relevant to a measurement run."""
+    """Per-region settings relevant to a measurement run (proxy/enabled resolved
+    per marketplace through the cities store — ADR-0011)."""
 
     region: Region
     proxy_ref: str | None
     marketplaces: tuple[Marketplace, ...]
+    marketplace_proxies: dict[Marketplace, str | None]
 
 
 @dataclass(frozen=True)
@@ -41,35 +43,46 @@ class WorkSet:
 
 
 async def run(storage_factory: StorageFactory | None = None, settings: Settings | None = None) -> WorkSet:
-    """Return the active work set, mirroring `_active_pairs` semantics exactly.
-
-    WB: paired with all active regions. Ozon: paired only with active regions
-    that carry an `"ozon"` geo entry.
+    """Return the active work set, per-city settings resolved through the cities
+    store (ADR-0011): a marketplace disabled for a city is excluded from `pairs`
+    and `cities` entirely; WB/Ozon get their effective proxy independently.
     """
     settings = settings or get_settings()
     storage_factory = storage_factory or make_storage(settings)
-    proxy_map = parse_proxy_map(settings.proxy_map_json)
+    config = await cities_store.load(settings, storage_factory)
+    effective_by_code = {c.code: c for c in cities_store.list_effective(config)}
+
     async with storage_factory() as storage:
         products = await storage.products.list_active()
         regions = await storage.regions.list_active()
-        ozon_regions = [r for r in regions if "ozon" in r.geo]
 
         pairs: list[tuple[Product, Region, Marketplace]] = []
         for product in products:
-            target_regions = regions if product.marketplace == Marketplace.WB else ozon_regions
-            for region in target_regions:
+            mp_key = "wb" if product.marketplace == Marketplace.WB else "ozon"
+            for region in regions:
+                effective_city = effective_by_code.get(region.code)
+                if effective_city is None or mp_key not in effective_city.marketplaces:
+                    continue
                 pairs.append((product, region, product.marketplace))
 
-        cities = [
-            CitySettings(
-                region=region,
-                proxy_ref=proxy_map.get(region.code, settings.proxy_url),
-                marketplaces=tuple(
-                    sorted({mp for (_p, r, mp) in pairs if r.id == region.id}, key=lambda m: m.value)
-                ),
+        cities = []
+        for region in regions:
+            effective_city = effective_by_code.get(region.code)
+            marketplace_proxies: dict[Marketplace, str | None] = {}
+            if effective_city is not None:
+                if "wb" in effective_city.marketplaces:
+                    marketplace_proxies[Marketplace.WB] = effective_city.marketplaces["wb"].proxy
+                if "ozon" in effective_city.marketplaces:
+                    marketplace_proxies[Marketplace.OZON] = effective_city.marketplaces["ozon"].proxy
+            proxy_ref = next(iter(marketplace_proxies.values()), None)
+            cities.append(
+                CitySettings(
+                    region=region,
+                    proxy_ref=proxy_ref,
+                    marketplaces=tuple(sorted(marketplace_proxies.keys(), key=lambda m: m.value)),
+                    marketplace_proxies=marketplace_proxies,
+                )
             )
-            for region in regions
-        ]
 
     return WorkSet(pairs=pairs, cities=cities)
 

@@ -7,8 +7,8 @@ as a background task, guarded against overlaps by a simple in-process flag.
 
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.enums import RunMode
 from app.obs.metrics import RunMetrics, compute_run_metrics
 from app.panel import queries
+from app.scripts import cities as cities_store
 from app.scripts import control_panel, orchestrator
 from app.storage.factory import make_storage
 
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
             }
 
         work_set = await control_panel.run()
+        cities_config = await cities_store.load(get_settings(), storage_factory)
 
         latest_metrics = run_metrics.get(runs[0].id) if runs else None
         context = {
@@ -64,8 +66,57 @@ def create_app() -> FastAPI:
             "run_metrics": run_metrics,
             "snapshots": snapshots,
             "cities": work_set.cities,
+            "defaults": cities_config.defaults,
+            "city_configs": cities_config.cities,
+            "mask_proxy": cities_store.mask_proxy,
         }
         return _TEMPLATES.TemplateResponse(request, "dashboard.html", context)
+
+    @app.post("/cities")
+    async def add_city(
+        code: str = Form(...), name: str = Form(...), geo_ozon: str = Form("")
+    ) -> RedirectResponse:
+        settings = get_settings()
+        storage_factory = make_storage(settings)
+        config = await cities_store.load(settings, storage_factory)
+        geo = {"ozon": geo_ozon} if geo_ozon else {}
+        config = cities_store.add_city(config, code=code, name=name, geo=geo)
+        cities_store.save(config, settings)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/cities/{code}/delete")
+    async def delete_city(code: str) -> RedirectResponse:
+        settings = get_settings()
+        storage_factory = make_storage(settings)
+        config = await cities_store.load(settings, storage_factory)
+        config = cities_store.remove_city(config, code=code)
+        cities_store.save(config, settings)
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/cities/{code}/{mp}")
+    async def set_city_marketplace(
+        code: str,
+        mp: str,
+        mode: str = Form(...),
+        enabled: bool = Form(False),
+        proxy: str = Form(""),
+        interval_min: int = Form(360),
+    ) -> RedirectResponse:
+        settings = get_settings()
+        storage_factory = make_storage(settings)
+        config = await cities_store.load(settings, storage_factory)
+        config = cities_store.set_marketplace(
+            config,
+            code=code,
+            marketplace=mp,
+            mode="override" if mode == "override" else "inherit",
+            enabled=enabled,
+            proxy=proxy or None,
+            interval_min=interval_min,
+            keep_proxy_if_empty=True,
+        )
+        cities_store.save(config, settings)
+        return RedirectResponse("/", status_code=303)
 
     @app.post("/run")
     async def run_now(background_tasks: BackgroundTasks) -> HTMLResponse:

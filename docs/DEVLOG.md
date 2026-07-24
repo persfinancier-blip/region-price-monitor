@@ -420,3 +420,39 @@
   skipped (без Postgres в песочнице).
 - **Не делали в этом слайсе** (следующий): мастер настройки — `prompt-14`; UI вкладки
   «Параметры подключения» (Фаза 8.4); финализация списка ценовых полей (SPEC §9.5).
+
+## 2026-07-24 — Города: функциональный блок + локальный стор настроек (`prompt-14-cities-tab`)
+
+- **Приоритет пересмотрен владельцем** (2026-07-23): панель должна быть рабочей точкой ввода
+  настроек, не read-only витриной. Этот слайс **отменяет** ранее запланированный `prompt-14`
+  (мастер настройки — откладывается) и вместо этого делает первый функциональный кусок —
+  блок «Города» на Дашборде (SPEC §3). [ADR-0011](adr/0011-local-settings-store.md).
+- **Локальный стор** `app/scripts/cities.py` (`settings.city_config_path`, по умолчанию
+  `config/cities.json`) — плоский JSON, атомарная запись (temp+`os.replace`, как в
+  `app/storage/local.py`). Модель «общее + локальное переопределение»: `defaults` по WB/Ozon
+  + список городов, каждый с `mode: inherit | override` на площадку. `list_effective()`
+  резолвит и убирает отключённые пары (город × площадка) из рабочего набора целиком.
+- **Движок переключён**: `app/scripts/control_panel.py::run` строит `WorkSet` через
+  `cities.list_effective()` вместо прямого `parse_proxy_map(settings.proxy_map_json)`;
+  `CitySettings` получил `marketplace_proxies` — прокси резолвится независимо для WB/Ozon
+  одного города. Без файла `config/cities.json` — сидируется один раз из `regions` +
+  `proxy_map_json`/интервалов, сохраняя прежнее поведение (`WB` — всегда все активные регионы,
+  `Ozon` — только с гео `ozon`).
+- **Панель**: `POST /cities` (добавить), `POST /cities/{code}/{mp}` (mode/enabled/proxy/interval,
+  пустой прокси на сабмите не обнуляет сохранённый), `POST /cities/{code}/delete` (деактивация,
+  история не трогается) — все тонкие обёртки над `app/scripts/cities.py` (ADR-0008). Дашборд
+  показывает общий профиль read-only + раскрываемые карточки городов. `cli.py cities
+  list|add|set|enable|disable|remove` — тот же стор из командной строки.
+- **Ручная проверка** (`STORAGE_BACKEND=local`): поднял `panel`, добавил город, выставил Ozon
+  override с прокси и отключил WB для `msk` через HTML-формы — `config/cities.json` отразил
+  изменения; `control-panel show` показал `region=msk proxy=*** marketplaces=ozon` (WB пропал
+  из набора, Ozon-прокси замаскирован).
+- **Тесты**: `test_cities_store.py` (round-trip/effective-resolution/CRUD/seed, 10 кейсов),
+  `test_panel_cities.py` (дашборд рендерит блок, все три роута мутируют файл, маскирование,
+  keep-proxy-if-empty, 7 кейсов); `test_scripts_control_panel.py`/`test_panel_dashboard.py`
+  адаптированы под новый резолв (не меняли семантику, только фейковые фикстуры). Добавлена
+  рантайм-зависимость `python-multipart` (нужна FastAPI `Form(...)`). DoD-гейт зелёный:
+  189 passed / 11 skipped.
+- **Не делали в этом слайсе** (следующий): редактор общего профиля (`defaults`) и глобальный
+  тумблер площадки — общий профиль пока read-only; куки/параметры-подключения-UI/логи —
+  отдельные слайсы Фазы 8.
