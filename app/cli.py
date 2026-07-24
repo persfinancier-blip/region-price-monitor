@@ -12,6 +12,7 @@ import sys
 from app.config import get_settings
 from app.obs.logging import configure_logging
 from app.scripts import cities as cities_script
+from app.scripts import connection as connection_script
 from app.scripts import control_panel, export, health, orchestrator, ozon, panel, parameters, report, wb
 from app.scripts import cookies as cookies_script
 
@@ -102,6 +103,14 @@ def main(argv: list[str] | None = None) -> int:
     cities_remove = cities_sub.add_parser("remove", help="Remove a city from the config")
     cities_remove.add_argument("code")
 
+    connection_parser = subparsers.add_parser(
+        "connection", help="Inspect the configured source/sink (io.json)"
+    )
+    connection_sub = connection_parser.add_subparsers(dest="connection_action")
+    connection_sub.add_parser("show", help="Print the current source/sink config (database_url masked)")
+    connection_sub.add_parser("validate", help="Validate the configured source and sink mappings")
+    connection_sub.add_parser("preview", help="Print the first mapped source rows")
+
     cookies_parser = subparsers.add_parser("cookies", help="Manage cookie bundles")
     cookies_sub = cookies_parser.add_subparsers(dest="cookies_action", required=True)
     cookies_collect = cookies_sub.add_parser("collect", help="Guided walk: cities with no remembered address")
@@ -170,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cities_action == "remove":
             cities_argv = ["remove", args.code]
         return cities_script.main(cities_argv)
+    if args.command == "connection":
+        connection_argv = [args.connection_action] if args.connection_action else []
+        return connection_script.main(connection_argv)
     if args.command == "cookies":
         cookies_argv = [args.cookies_action]
         if args.cookies_action == "collect":

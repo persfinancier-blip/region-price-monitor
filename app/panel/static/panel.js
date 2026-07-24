@@ -68,3 +68,24 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 });
+
+// Connection tab: "Предпросмотр" posts the current (unsaved) form to /connection/preview
+// and renders the returned partial without a page reload.
+document.addEventListener("DOMContentLoaded", () => {
+  const bindPreview = (buttonId, formId, targetId, target) => {
+    const button = document.getElementById(buttonId);
+    const form = document.getElementById(formId);
+    const output = document.getElementById(targetId);
+    if (!button || !form || !output) return;
+
+    button.addEventListener("click", async () => {
+      const data = new FormData(form);
+      data.set("target", target);
+      const response = await fetch("/connection/preview", { method: "POST", body: data });
+      output.innerHTML = await response.text();
+    });
+  };
+
+  bindPreview("preview-source-button", "source-form", "source-preview", "source");
+  bindPreview("preview-sink-button", "sink-form", "sink-preview", "sink");
+});

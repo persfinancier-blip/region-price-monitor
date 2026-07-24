@@ -22,9 +22,18 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
 from app.enums import Marketplace, RunMode
+from app.io.base import (
+    PRODUCT_FIELDS,
+    REGION_FIELDS,
+    REQUIRED_PRODUCT_FIELDS,
+    REQUIRED_RESULT_FIELDS,
+    RESULT_FIELDS,
+)
+from app.io.mapping import EndpointConfig, IoConfig
 from app.obs.metrics import RunMetrics, compute_run_metrics
 from app.panel import queries
 from app.scripts import cities as cities_store
+from app.scripts import connection as connection_script
 from app.scripts import control_panel, orchestrator
 from app.scripts import cookies as cookies_script
 from app.storage.factory import make_storage
@@ -33,7 +42,6 @@ _BASE_DIR = Path(__file__).parent
 _TEMPLATES = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
 _PLACEHOLDER_TABS = {
-    "connection": "Параметры подключения",
     "script-editor": "Редактор скриптов",
     "logs": "Логи / история",
 }
@@ -222,6 +230,58 @@ def create_app() -> FastAPI:
         cookies_script.clear(marketplace, city, settings=get_settings())
         return RedirectResponse("/tab/cookies", status_code=303)
 
+    @app.get("/tab/connection", response_class=HTMLResponse)
+    async def connection_tab(request: Request) -> HTMLResponse:
+        settings = get_settings()
+        config = connection_script.load(settings)
+        context = await _connection_context(config)
+        context["active_tab"] = "connection"
+        context["tabs"] = _tab_list()
+        return _TEMPLATES.TemplateResponse(request, "connection.html", context)
+
+    @app.post("/connection/source")
+    async def save_connection_source(request: Request) -> RedirectResponse:
+        settings = get_settings()
+        config = connection_script.load(settings)
+        form = await request.form()
+        endpoint = _endpoint_from_source_form(form, stored=config.source)
+        connection_script.save(IoConfig(source=endpoint, sink=config.sink), settings)
+        return RedirectResponse("/tab/connection", status_code=303)
+
+    @app.post("/connection/sink")
+    async def save_connection_sink(request: Request) -> RedirectResponse:
+        settings = get_settings()
+        config = connection_script.load(settings)
+        form = await request.form()
+        endpoint = _endpoint_from_sink_form(form, stored=config.sink)
+        connection_script.save(IoConfig(source=config.source, sink=endpoint), settings)
+        return RedirectResponse("/tab/connection", status_code=303)
+
+    @app.post("/connection/preview")
+    async def preview_connection(request: Request) -> HTMLResponse:
+        settings = get_settings()
+        config = connection_script.load(settings)
+        form = await request.form()
+        target = form.get("target", "source")
+
+        context: dict[str, Any]
+        if target == "sink":
+            endpoint = _endpoint_from_sink_form(form, stored=config.sink)
+            errors = await connection_script.validate_sink(endpoint)
+            header = await connection_script.preview_sink_header(endpoint)
+            context = {"errors": errors, "sink_header": header, "target": "sink"}
+        else:
+            endpoint = _endpoint_from_source_form(form, stored=config.source)
+            errors = await connection_script.validate_source(endpoint)
+            rows = (
+                await connection_script.preview_source(endpoint)
+                if not errors
+                else {"products": [], "regions": []}
+            )
+            context = {"errors": errors, "preview_rows": rows, "target": "source"}
+
+        return _TEMPLATES.TemplateResponse(request, "_connection_preview.html", context)
+
     @app.get("/tab/{name}", response_class=HTMLResponse)
     async def tab(request: Request, name: str) -> HTMLResponse:
         title = _PLACEHOLDER_TABS.get(name, name)
@@ -256,10 +316,99 @@ async def _refresh_and_release(marketplace: Marketplace, job: "_CollectJob") -> 
         job.running = False
 
 
+def _mapping_from_form(form: Any, prefix: str, fields: tuple[str, ...]) -> dict[str, str]:
+    mapping = {}
+    for field in fields:
+        value = str(form.get(f"{prefix}__{field}", "")).strip()
+        if value:
+            mapping[field] = value
+    return mapping
+
+
+def _endpoint_from_source_form(form: Any, *, stored: EndpointConfig | None) -> EndpointConfig:
+    kind = str(form.get("kind", "json"))
+    products_mapping = _mapping_from_form(form, "map_products", PRODUCT_FIELDS)
+    regions_mapping = _mapping_from_form(form, "map_regions", REGION_FIELDS)
+
+    params: dict[str, Any]
+    if kind == "db":
+        stored_url = stored.params.get("database_url") if stored and stored.kind == "db" else None
+        database_url = connection_script.resolve_database_url(
+            str(form.get("database_url", "")) or None, stored_url
+        )
+        params = {
+            "database_url": database_url,
+            "products_table": str(form.get("products_table", "")) or None,
+            "regions_table": str(form.get("regions_table", "")) or None,
+        }
+    elif kind == "xlsx":
+        params = {
+            "products": {
+                "path": str(form.get("products_path", "")) or None,
+                "sheet": str(form.get("products_sheet", "")) or None,
+                "range": str(form.get("products_range", "")) or None,
+            },
+            "regions": {
+                "path": str(form.get("regions_path", "")) or None,
+                "sheet": str(form.get("regions_sheet", "")) or None,
+                "range": str(form.get("regions_range", "")) or None,
+            },
+        }
+    else:
+        params = {
+            "products_path": str(form.get("products_path", "")) or None,
+            "regions_path": str(form.get("regions_path", "")) or None,
+        }
+
+    return EndpointConfig(kind=kind, params=params, products=products_mapping, regions=regions_mapping)
+
+
+def _endpoint_from_sink_form(form: Any, *, stored: EndpointConfig | None) -> EndpointConfig:
+    kind = str(form.get("kind", "json"))
+    results_mapping = _mapping_from_form(form, "map_results", RESULT_FIELDS)
+
+    if kind == "db":
+        stored_url = stored.params.get("database_url") if stored and stored.kind == "db" else None
+        database_url = connection_script.resolve_database_url(
+            str(form.get("database_url", "")) or None, stored_url
+        )
+        params = {"database_url": database_url, "results_table": str(form.get("results_table", "")) or None}
+    elif kind == "xlsx":
+        params = {
+            "path": str(form.get("path", "")) or None,
+            "sheet": str(form.get("sheet", "")) or None,
+        }
+    else:
+        params = {"path": str(form.get("path", "")) or None}
+
+    return EndpointConfig(kind=kind, params=params, results=results_mapping)
+
+
+async def _connection_context(config: IoConfig) -> dict[str, Any]:
+    source = config.source
+    sink = config.sink
+
+    source_errors = await connection_script.validate_source(source) if source else []
+    sink_errors = await connection_script.validate_sink(sink) if sink else []
+
+    return {
+        "source": connection_script.with_masked_database_url(source),
+        "sink": connection_script.with_masked_database_url(sink),
+        "product_fields": PRODUCT_FIELDS,
+        "region_fields": REGION_FIELDS,
+        "result_fields": RESULT_FIELDS,
+        "required_product_fields": REQUIRED_PRODUCT_FIELDS,
+        "required_result_fields": REQUIRED_RESULT_FIELDS,
+        "source_errors": source_errors,
+        "sink_errors": sink_errors,
+    }
+
+
 def _tab_list() -> list[dict[str, str]]:
     tabs = [
         {"key": "dashboard", "label": "Панель управления", "href": "/"},
         {"key": "cookies", "label": "Куки", "href": "/tab/cookies"},
+        {"key": "connection", "label": "Параметры подключения", "href": "/tab/connection"},
     ]
     tabs += [{"key": key, "label": label, "href": f"/tab/{key}"} for key, label in _PLACEHOLDER_TABS.items()]
     return tabs

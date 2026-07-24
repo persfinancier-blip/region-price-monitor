@@ -1,0 +1,15 @@
+{% if errors %}
+<ul class="conn-errors">
+  {% for err in errors %}<li>{{ err }}</li>{% endfor %}
+</ul>
+{% elif target == "sink" %}
+<p class="muted">Заголовок вывода:</p>
+<pre>{{ sink_header }}</pre>
+{% else %}
+<p class="muted">Товары (первые строки):</p>
+<pre>{% for row in preview_rows.products %}{{ row }}
+{% endfor %}</pre>
+<p class="muted">Регионы (первые строки):</p>
+<pre>{% for row in preview_rows.regions %}{{ row }}
+{% endfor %}</pre>
+{% endif %}

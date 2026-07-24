@@ -90,3 +90,9 @@ button {
 }
 
 button:disabled { background: var(--color-border); cursor: not-allowed; }
+
+.conn-subtabs { display: flex; flex-direction: column; gap: 4px; }
+.conn-subtab { color: var(--color-text-muted); text-decoration: none; padding: 4px 0; }
+.conn-subtab--active, .conn-subtab:hover { color: var(--color-accent); }
+
+.conn-errors { color: var(--color-danger); }
