@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Куки</h1>
+  <p class="muted">
+    Сбор куки требует локальный видимый браузер (Playwright Chromium). Один раз авторизуйтесь/
+    пройдите защиту в открывшемся окне — дальше поток сам обходит настроенные города, паузa
+    только на капче. Прогрев на сервере без экрана (headless/Xvfb) — открытый вопрос, пока не
+    реализован (SPEC §9.2).
+  </p>
+
+  {% for mp in ["wb", "ozon"] %}
+  <div class="cookie-mp-block">
+    <h2>{{ "Wildberries" if mp == "wb" else "Ozon" }}</h2>
+    <form class="collect-form" data-mp="{{ mp }}" method="post" action="/cookies/{{ mp }}/collect">
+      <button type="submit" {% if jobs[mp].running %}disabled{% endif %}>Авторизоваться и собрать</button>
+    </form>
+    <div id="collect-status-{{ mp }}">
+      {% if jobs[mp].running %}
+      <p class="status status--running">Сбор выполняется</p>
+      {% endif %}
+    </div>
+    <div id="collect-progress-{{ mp }}">
+      {% if jobs[mp].steps %}
+      <ul>
+        {% for step in jobs[mp].steps %}
+        <li>{{ step.city_code }}: {{ step.status }}{% if step.detail %} ({{ step.detail }}){% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Здоровье кук</h2>
+  <table>
+    <thead>
+      <tr><th>Площадка</th><th>Город</th><th>Возраст</th><th>Статус</th></tr>
+    </thead>
+    <tbody>
+      {% for h in health %}
+      <tr>
+        <td>{{ h.marketplace }}</td>
+        <td>{{ h.region_code }}</td>
+        <td>{{ "%.1f"|format(h.age_hours) }} ч</td>
+        <td>
+          {% if h.status == "valid" %}валидна
+          {% elif h.status == "expiring" %}истекает
+          {% elif h.status == "stale" %}протухла
+          {% else %}нет данных
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">Куки ещё не собраны</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Ручное управление</h2>
+  {% for city in cities %}
+  <details class="city-block">
+    <summary>{{ city.name }} ({{ city.code }})</summary>
+    {% for mp in ["wb", "ozon"] %}
+    <form class="manual-cookie-form" method="post" action="/cookies/{{ mp }}/{{ city.code }}">
+      <fieldset>
+        <legend>{{ mp }}</legend>
+        <label>
+          Куки (JSON storage_state):
+          <textarea name="raw" rows="3" placeholder="{}"></textarea>
+        </label>
+        <button type="submit">Сохранить</button>
+      </fieldset>
+    </form>
+    <form method="post" action="/cookies/{{ mp }}/{{ city.code }}/clear">
+      <button type="submit">Очистить {{ mp }}</button>
+    </form>
+    {% endfor %}
+  </details>
+  {% else %}
+  <p class="muted">Городов ещё нет — настройте их на вкладке «Города».</p>
+  {% endfor %}
+</section>
+{% endblock %}

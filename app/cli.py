@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.obs.logging import configure_logging
 from app.scripts import cities as cities_script
 from app.scripts import control_panel, export, health, orchestrator, ozon, panel, parameters, report, wb
+from app.scripts import cookies as cookies_script
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -101,6 +102,20 @@ def main(argv: list[str] | None = None) -> int:
     cities_remove = cities_sub.add_parser("remove", help="Remove a city from the config")
     cities_remove.add_argument("code")
 
+    cookies_parser = subparsers.add_parser("cookies", help="Manage cookie bundles")
+    cookies_sub = cookies_parser.add_subparsers(dest="cookies_action", required=True)
+    cookies_collect = cookies_sub.add_parser("collect", help="Login-once + auto city-walk collect")
+    cookies_collect.add_argument("marketplace", choices=["wb", "ozon"])
+    cookies_status = cookies_sub.add_parser("status", help="Print health for stored bundles")
+    cookies_status.add_argument("marketplace", nargs="?", choices=["wb", "ozon"], default=None)
+    cookies_set = cookies_sub.add_parser("set-manual", help="Paste a cookie bundle from a JSON file")
+    cookies_set.add_argument("marketplace", choices=["wb", "ozon"])
+    cookies_set.add_argument("region_code")
+    cookies_set.add_argument("file")
+    cookies_clear = cookies_sub.add_parser("clear", help="Mark a stored bundle stale")
+    cookies_clear.add_argument("marketplace", choices=["wb", "ozon"])
+    cookies_clear.add_argument("region_code")
+
     args = parser.parse_args(argv)
 
     configure_logging(get_settings())
@@ -152,6 +167,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cities_action == "remove":
             cities_argv = ["remove", args.code]
         return cities_script.main(cities_argv)
+    if args.command == "cookies":
+        cookies_argv = [args.cookies_action]
+        if args.cookies_action == "collect":
+            cookies_argv += [args.marketplace]
+        elif args.cookies_action == "status":
+            if args.marketplace:
+                cookies_argv += [args.marketplace]
+        elif args.cookies_action == "set-manual":
+            cookies_argv += [args.marketplace, args.region_code, args.file]
+        elif args.cookies_action == "clear":
+            cookies_argv += [args.marketplace, args.region_code]
+        return cookies_script.main(cookies_argv)
 
     parser.error(f"unknown command: {args.command}")
     return 2
