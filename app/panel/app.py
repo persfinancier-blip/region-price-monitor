@@ -3,9 +3,16 @@
 Dashboard reads go through `app/panel/queries.py`, `app.obs.metrics`, and
 `app.scripts.control_panel.run`. "Run now" delegates to `app.scripts.orchestrator.run`
 as a background task, guarded against overlaps by a simple in-process flag.
+
+The «Куки» tab (ADR-0012) delegates to `app/scripts/cookies.py`; its collect job runs
+`warm_all` (a sync Playwright call) on a worker thread so it doesn't block the event
+loop, with per-marketplace progress tracked in `_cookie_jobs` for the polling `status` view.
 """
 
+import json
+import threading
 from pathlib import Path
+from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -13,24 +20,50 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
-from app.enums import RunMode
+from app.enums import Marketplace, RunMode
 from app.obs.metrics import RunMetrics, compute_run_metrics
 from app.panel import queries
 from app.scripts import cities as cities_store
 from app.scripts import control_panel, orchestrator
+from app.scripts import cookies as cookies_script
 from app.storage.factory import make_storage
 
 _BASE_DIR = Path(__file__).parent
 _TEMPLATES = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
 _PLACEHOLDER_TABS = {
-    "cookies": "Куки",
     "connection": "Параметры подключения",
     "script-editor": "Редактор скриптов",
     "logs": "Логи / история",
 }
 
 _run_state: dict[str, bool] = {"running": False}
+
+
+class _CollectJob:
+    """In-process progress state for one marketplace's collect job."""
+
+    def __init__(self) -> None:
+        self._cancel_event = threading.Event()
+        self.running = False
+        self.steps: list[dict[str, str | None]] = []
+
+    def is_set(self) -> bool:
+        return self._cancel_event.is_set()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+
+    def reset(self) -> None:
+        self._cancel_event.clear()
+        self.running = True
+        self.steps = []
+
+    def on_progress(self, city_code: str, status: str, detail: str | None = None) -> None:
+        self.steps.append({"city_code": city_code, "status": status, "detail": detail})
+
+
+_cookie_jobs: dict[Marketplace, _CollectJob] = {mp: _CollectJob() for mp in Marketplace}
 
 
 def create_app() -> FastAPI:
@@ -128,6 +161,50 @@ def create_app() -> FastAPI:
             message = "Прогон уже выполняется"
         return HTMLResponse(f'<p id="run-status">{message}</p>')
 
+    @app.get("/tab/cookies", response_class=HTMLResponse)
+    async def cookies_tab(request: Request) -> HTMLResponse:
+        settings = get_settings()
+        config = await cities_store.load(settings)
+        health = await cookies_script.status(settings=settings)
+        jobs = {mp.value: {"running": job.running, "steps": job.steps} for mp, job in _cookie_jobs.items()}
+        context = {
+            "active_tab": "cookies",
+            "tabs": _tab_list(),
+            "cities": config.cities,
+            "health": health,
+            "jobs": jobs,
+        }
+        return _TEMPLATES.TemplateResponse(request, "cookies.html", context)
+
+    @app.post("/cookies/{mp}/collect")
+    async def collect_cookies(mp: str, background_tasks: BackgroundTasks) -> HTMLResponse:
+        marketplace = Marketplace(mp)
+        job = _cookie_jobs[marketplace]
+        if not job.running:
+            job.reset()
+            background_tasks.add_task(_collect_and_release, marketplace, job)
+            message = "Сбор запущен"
+        else:
+            message = "Сбор уже выполняется"
+        return HTMLResponse(f'<p id="collect-status-{mp}">{message}</p>')
+
+    @app.get("/cookies/status")
+    async def cookies_status() -> dict[str, Any]:
+        return {mp.value: {"running": job.running, "steps": job.steps} for mp, job in _cookie_jobs.items()}
+
+    @app.post("/cookies/{mp}/{city}")
+    async def set_manual_cookie(mp: str, city: str, raw: str = Form(...)) -> RedirectResponse:
+        marketplace = Marketplace(mp)
+        storage_state = json.loads(raw) if raw else {}
+        cookies_script.set_manual(marketplace, city, storage_state, settings=get_settings())
+        return RedirectResponse("/tab/cookies", status_code=303)
+
+    @app.post("/cookies/{mp}/{city}/clear")
+    async def clear_cookie(mp: str, city: str) -> RedirectResponse:
+        marketplace = Marketplace(mp)
+        cookies_script.clear(marketplace, city, settings=get_settings())
+        return RedirectResponse("/tab/cookies", status_code=303)
+
     @app.get("/tab/{name}", response_class=HTMLResponse)
     async def tab(request: Request, name: str) -> HTMLResponse:
         title = _PLACEHOLDER_TABS.get(name, name)
@@ -148,7 +225,17 @@ async def _run_and_release() -> None:
         _run_state["running"] = False
 
 
+async def _collect_and_release(marketplace: Marketplace, job: "_CollectJob") -> None:
+    try:
+        await cookies_script.collect(marketplace, cancel=job, on_progress=job.on_progress)
+    finally:
+        job.running = False
+
+
 def _tab_list() -> list[dict[str, str]]:
-    tabs = [{"key": "dashboard", "label": "Панель управления", "href": "/"}]
+    tabs = [
+        {"key": "dashboard", "label": "Панель управления", "href": "/"},
+        {"key": "cookies", "label": "Куки", "href": "/tab/cookies"},
+    ]
     tabs += [{"key": key, "label": label, "href": f"/tab/{key}"} for key, label in _PLACEHOLDER_TABS.items()]
     return tabs
