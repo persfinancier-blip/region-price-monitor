@@ -1,6 +1,8 @@
 """Unit tests for FsCookieStore and is_stale — no network, always runs in CI."""
 
 import datetime
+import json
+import os
 
 from app.cookies.base import CookieBundle, is_stale
 from app.cookies.fs import FsCookieStore
@@ -67,3 +69,24 @@ def test_is_stale_true_by_explicit_flag() -> None:
     bundle = _bundle(warmed_at=datetime.datetime.now(datetime.UTC), stale=True)
 
     assert is_stale(bundle, ttl_hours=12) is True
+
+
+def test_load_bundle_without_address_label_defaults_to_none(tmp_path) -> None:
+    store = FsCookieStore(str(tmp_path))
+    path = os.path.join(str(tmp_path), "ozon", "msk.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        "marketplace": "ozon",
+        "region_code": "msk",
+        "storage_state": {"cookies": []},
+        "warmed_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "stale": False,
+        "source_ref": "direct",
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+    loaded = store.load(Marketplace.OZON, "msk")
+
+    assert loaded is not None
+    assert loaded.address_label is None

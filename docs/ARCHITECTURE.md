@@ -206,7 +206,7 @@ class TaskQueue(Protocol):
 | `import-products` | `app.scripts.control_panel`        | `python -m app.scripts.control_panel import-products <file>`|
 | `import-regions`  | `app.scripts.control_panel`        | `python -m app.scripts.control_panel import-regions <file>` |
 | `cities`          | `app.scripts.cities`               | `python -m app.scripts.cities [list\|add\|set\|enable\|disable\|remove]` |
-| `cookies`         | `app.scripts.cookies`              | `python -m app.scripts.cookies [collect\|status\|set-manual\|clear]` |
+| `cookies`         | `app.scripts.cookies`              | `python -m app.scripts.cookies [collect\|refresh\|status\|set-manual\|clear]` |
 | `measure-wb`      | `app.scripts.wb`                   | `python -m app.scripts.wb [--region …] [--sku …]`            |
 | `measure-ozon`    | `app.scripts.ozon`                 | `python -m app.scripts.ozon [--region …] [--sku …]`          |
 | `warm-ozon`       | `app.scripts.health`               | `python -m app.scripts.health warm [--region …]`             |

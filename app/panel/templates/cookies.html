@@ -5,8 +5,11 @@
   <p class="muted">
     Сбор куки требует локальный видимый браузер (Playwright Chromium). Один раз авторизуйтесь/
     пройдите защиту в открывшемся окне — дальше поток сам обходит настроенные города, паузa
-    только на капче. Прогрев на сервере без экрана (headless/Xvfb) — открытый вопрос, пока не
-    реализован (SPEC §9.2).
+    только на капче. Для Ozon регион зашит в куку и выставляется выбором адреса доставки:
+    «Авторизоваться и собрать» проходит города без запомненного адреса (оператор выбирает
+    адрес один раз, дальше он запоминается), а «Обновить протухшие» автоматически переизбирает
+    уже запомненный адрес для протухших городов. Прогрев на сервере без экрана (headless/Xvfb) —
+    открытый вопрос, пока не реализован (SPEC §9.2).
   </p>
 
   {% for mp in ["wb", "ozon"] %}
@@ -15,6 +18,11 @@
     <form class="collect-form" data-mp="{{ mp }}" method="post" action="/cookies/{{ mp }}/collect">
       <button type="submit" {% if jobs[mp].running %}disabled{% endif %}>Авторизоваться и собрать</button>
     </form>
+    {% if mp == "ozon" %}
+    <form class="refresh-form" data-mp="{{ mp }}" method="post" action="/cookies/{{ mp }}/refresh">
+      <button type="submit" {% if jobs[mp].running %}disabled{% endif %}>Обновить протухшие</button>
+    </form>
+    {% endif %}
     <div id="collect-status-{{ mp }}">
       {% if jobs[mp].running %}
       <p class="status status--running">Сбор выполняется</p>
@@ -37,13 +45,14 @@
   <h2>Здоровье кук</h2>
   <table>
     <thead>
-      <tr><th>Площадка</th><th>Город</th><th>Возраст</th><th>Статус</th></tr>
+      <tr><th>Площадка</th><th>Город</th><th>Адрес</th><th>Возраст</th><th>Статус</th></tr>
     </thead>
     <tbody>
       {% for h in health %}
       <tr>
         <td>{{ h.marketplace }}</td>
         <td>{{ h.region_code }}</td>
+        <td>{{ h.address_label if h.address_label else "адрес не задан" }}</td>
         <td>{{ "%.1f"|format(h.age_hours) }} ч</td>
         <td>
           {% if h.status == "valid" %}валидна
@@ -54,7 +63,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="muted">Куки ещё не собраны</td></tr>
+      <tr><td colspan="5" class="muted">Куки ещё не собраны</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -73,6 +82,12 @@
           Куки (JSON storage_state):
           <textarea name="raw" rows="3" placeholder="{}"></textarea>
         </label>
+        {% if mp == "ozon" %}
+        <label>
+          Адрес доставки:
+          <input type="text" name="address_label" placeholder="напр. Москва, ул. Примерная, 1">
+        </label>
+        {% endif %}
         <button type="submit">Сохранить</button>
       </fieldset>
     </form>
