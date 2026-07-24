@@ -163,11 +163,16 @@ class TaskQueue(Protocol):
   `COOKIE_STORE_DIR`) в один типизированный снэпшот `Parameters`; печатает их с маской на секретах.
   `--check` вместо этого проверяет доступность стора: на `local` — что `LOCAL_STATE_DIR`
   доступен на запись, на `postgres` — `app.db.healthcheck` (`SELECT 1`); возвращает код выхода.
-- **`control_panel`** — активный набор «товар × регион» (то же правило, что и
-  `_active_pairs`: WB — все активные регионы, Ozon — только с `ozon` в `geo`) + настройки по
-  городу (прокси-ref маскируется только в печатном выводе). Подкоманды `import-products <file>` /
-  `import-regions <file>` заливают справочники из JSON (upsert); без подкоманды (или `show`) —
-  печатает активный рабочий набор.
+- **`control_panel`** — активный набор «товар × регион», резолвится через
+  `app/scripts/cities.py::list_effective()` (ADR-0011): пара (город, площадка) с `enabled=false`
+  выпадает из набора целиком, прокси резолвится независимо для WB/Ozon. Подкоманды
+  `import-products <file>` / `import-regions <file>` заливают справочники из JSON (upsert); без
+  подкоманды (или `show`) — печатает активный рабочий набор.
+- **`cities`** — локальный стор «Города» (`config/cities.json`, ADR-0011): общий профиль
+  (`defaults`) по WB/Ozon + список городов с `mode: inherit | override` на каждую площадку.
+  `list_effective()` резолвит inherit/override и убирает отключённые пары. Без файла — сидирует
+  один раз из `regions` + `proxy_map_json`/интервалов (прежнее поведение сохраняется). Панель
+  (`POST /cities*`) и CLI (`cities add|set|enable|disable|remove`) — тонкие обёртки над ним.
 - **`health`** — здоровье прокси (`ProxyHealthService`) и свежесть кук Ozon (`is_stale`); при
   `--fix`/`fix=True` протухшие куки перегреваются через `warm_if_stale`. Подкоманда
   `warm [--region …]` прогревает куки Ozon для одного или всех регионов напрямую.
@@ -200,6 +205,7 @@ class TaskQueue(Protocol):
 | `healthcheck`     | `app.scripts.parameters`           | `python -m app.scripts.parameters --check`                  |
 | `import-products` | `app.scripts.control_panel`        | `python -m app.scripts.control_panel import-products <file>`|
 | `import-regions`  | `app.scripts.control_panel`        | `python -m app.scripts.control_panel import-regions <file>` |
+| `cities`          | `app.scripts.cities`               | `python -m app.scripts.cities [list\|add\|set\|enable\|disable\|remove]` |
 | `measure-wb`      | `app.scripts.wb`                   | `python -m app.scripts.wb [--region …] [--sku …]`            |
 | `measure-ozon`    | `app.scripts.ozon`                 | `python -m app.scripts.ozon [--region …] [--sku …]`          |
 | `warm-ozon`       | `app.scripts.health`               | `python -m app.scripts.health warm [--region …]`             |

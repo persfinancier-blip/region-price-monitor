@@ -11,6 +11,7 @@ import sys
 
 from app.config import get_settings
 from app.obs.logging import configure_logging
+from app.scripts import cities as cities_script
 from app.scripts import control_panel, export, health, orchestrator, ozon, panel, parameters, report, wb
 
 
@@ -80,6 +81,26 @@ def main(argv: list[str] | None = None) -> int:
         "--preview", action="store_true", help="Print the first mapped rows instead of writing"
     )
 
+    cities_parser = subparsers.add_parser("cities", help="Manage the local cities store")
+    cities_sub = cities_parser.add_subparsers(dest="cities_action")
+    cities_sub.add_parser("list", help="Print defaults + effective per-city settings (default)")
+    cities_add = cities_sub.add_parser("add", help="Add a city")
+    cities_add.add_argument("code")
+    cities_add.add_argument("name")
+    cities_set = cities_sub.add_parser("set", help="Set a city's marketplace mode/override")
+    cities_set.add_argument("code")
+    cities_set.add_argument("marketplace", choices=["wb", "ozon"])
+    cities_set.add_argument("mode", choices=["inherit", "override"])
+    cities_set.add_argument("--proxy", default=None)
+    cities_set.add_argument("--interval-min", type=int, default=None)
+    cities_set.add_argument("--enabled", type=lambda s: s.lower() != "false", default=True)
+    for verb in ("enable", "disable"):
+        p = cities_sub.add_parser(verb, help=f"{verb.capitalize()} a marketplace for a city")
+        p.add_argument("code")
+        p.add_argument("marketplace", choices=["wb", "ozon"])
+    cities_remove = cities_sub.add_parser("remove", help="Remove a city from the config")
+    cities_remove.add_argument("code")
+
     args = parser.parse_args(argv)
 
     configure_logging(get_settings())
@@ -115,6 +136,22 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(report.run(args.run_id, args.last))
     if args.command == "export":
         return asyncio.run(export.run(preview=args.preview))
+    if args.command == "cities":
+        cities_argv = [args.cities_action] if args.cities_action else []
+        if args.cities_action == "add":
+            cities_argv = ["add", args.code, args.name]
+        elif args.cities_action == "set":
+            cities_argv = ["set", args.code, args.marketplace, args.mode]
+            if args.proxy is not None:
+                cities_argv += ["--proxy", args.proxy]
+            if args.interval_min is not None:
+                cities_argv += ["--interval-min", str(args.interval_min)]
+            cities_argv += ["--enabled", str(args.enabled)]
+        elif args.cities_action in ("enable", "disable"):
+            cities_argv = [args.cities_action, args.code, args.marketplace]
+        elif args.cities_action == "remove":
+            cities_argv = ["remove", args.code]
+        return cities_script.main(cities_argv)
 
     parser.error(f"unknown command: {args.command}")
     return 2
