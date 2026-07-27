@@ -1,7 +1,0 @@
-{
-  "regions": [
-    { "code": "msk", "name": "Москва",       "wb_dest": 1259570984 },
-    { "code": "kzn", "name": "Казань",        "wb_dest": -2133462 },
-    { "code": "nvs", "name": "Новосибирск",   "wb_dest": -364763 }
-  ]
-}

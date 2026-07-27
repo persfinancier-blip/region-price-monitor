@@ -1,5 +1,0 @@
-# Только ДЕСКТОП — прогрев кук в видимом браузере (логин/капча).
-# На Linux-сервере НЕ нужно.
--r requirements.txt
-undetected-chromedriver>=3.5.5
-selenium>=4.15.0

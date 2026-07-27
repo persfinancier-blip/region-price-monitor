@@ -1,7 +1,7 @@
 ﻿venv/
-profiles/
-results/
-debug/
 __pycache__/
-config.json
-.env
+*.pyc
+parser/core/config.json
+parser/core/profiles/
+parser/core/debug/
+parser/results/*
