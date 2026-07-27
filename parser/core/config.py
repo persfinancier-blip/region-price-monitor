@@ -1,16 +1,33 @@
 # -*- coding: utf-8 -*-
 """Единая конфигурация. Пути привязаны к папке проекта (не к cwd).
-PG-подключение — из окружения (сервер) или из config.json (десктоп)."""
+
+Раскладка поставки:
+    parser/                     ← PROJECT (видит пользователь)
+      run_parser.bat
+      sku.csv                   ← пример SKU (SAMPLE_SKU)
+      results/                  ← CSV-результаты (RESULTS_DIR)
+      core/                     ← BASE (машинерия: код, venv, config, profiles)
+        config.py (этот файл), cli.py, ...
+        config.json, products.json, profiles/, debug/
+
+PG-подключение — из окружения (сервер) или интерактивно (десктоп).
+"""
 import os
 import json
 from pathlib import Path
 
-BASE = Path(__file__).resolve().parent
+BASE = Path(__file__).resolve().parent            # core/  — машинерия
+PROJECT = BASE.parent                             # parser/ — то, что видит пользователь
+
+# машинерия (в core/)
 PROFILES_DIR = Path(os.getenv("RPM_PROFILES", BASE / "profiles"))
-RESULTS_DIR = Path(os.getenv("RPM_RESULTS", BASE / "results"))
 DEBUG_DIR = Path(os.getenv("RPM_DEBUG", BASE / "debug"))
 CONFIG_PATH = Path(os.getenv("RPM_CONFIG", BASE / "config.json"))
 PRODUCTS_PATH = Path(os.getenv("RPM_PRODUCTS", BASE / "products.json"))
+
+# видимое пользователю (в parser/)
+RESULTS_DIR = Path(os.getenv("RPM_RESULTS", PROJECT / "results"))
+SAMPLE_SKU = PROJECT / "sku.csv"
 
 for _d in (PROFILES_DIR, RESULTS_DIR, DEBUG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
@@ -44,7 +61,6 @@ def load_products():
 
 
 def pg_params_from_env():
-    """PG-параметры из окружения (для сервера). None, если не заданы."""
     host = os.getenv("RPM_PG_HOST") or os.getenv("PGHOST")
     if not host:
         return None

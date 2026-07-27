@@ -23,6 +23,26 @@ return null;
 """
 
 
+def _flush_stdin():
+    """Сброс мусора из буфера ввода (после запуска браузера первый Enter иначе теряется)."""
+    try:
+        import msvcrt
+        while msvcrt.kbhit():
+            msvcrt.getch()
+    except Exception:
+        try:
+            import sys as _sys
+            import termios
+            termios.tcflush(_sys.stdin, termios.TCIFLUSH)
+        except Exception:
+            pass
+
+
+def _ask(prompt):
+    _flush_stdin()
+    return input(prompt)
+
+
 def _profile_dir(region_code):
     return PROFILES_DIR / f"ozon_{region_code}"
 
@@ -98,7 +118,7 @@ def warm_region(region_code, sample_sku, region_name=None):
         print(f"\n  🌍 Регион {label}. Свежий профиль.")
         print("   • ЗАЛОГИНЬСЯ в Ozon (важно — залогиненного не гоняют через капчу).")
         print("   • Выбери/подтверди точку получения (ПВЗ).")
-        input("   Enter, когда готов...")
+        _ask("   Enter, когда готов...")
         ok_price = _wait_card(driver, sample_sku, label="прогрев: ")
         cookies = driver.get_cookies()
         (profile / "cookies.json").write_text(json.dumps(cookies, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -112,3 +132,81 @@ def warm_region(region_code, sample_sku, region_name=None):
         kill_pid_tree(pid)
         print("   🌐 окно закрыто")
     return str(profile) if ok_price else None
+
+
+def get_wb_dest(region_code, sample_wb_sku):
+    """Определяет WB dest: открывает WB, юзер выбирает регион, dest берём из логов сети."""
+    import undetected_chromedriver as uc
+    import urllib.parse as up
+    kill_browser()
+    profile = PROFILES_DIR / f"wb_{region_code}"
+    profile.mkdir(parents=True, exist_ok=True)
+    o = uc.ChromeOptions()
+    o.add_argument(f"--user-data-dir={profile}")
+    o.add_argument("--disable-blink-features=AutomationControlled")
+    o.add_argument("--no-sandbox")
+    o.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+    ver = get_chrome_major_version()
+    d = uc.Chrome(options=o, version_main=ver) if ver else uc.Chrome(options=o)
+    d.set_window_size(1400, 900)
+    pid = getattr(d, "browser_pid", None)
+    dest = None
+    try:
+        d.get(f"https://www.wildberries.ru/catalog/{sample_wb_sku}/detail.aspx")
+        time.sleep(2)
+        print(f"   🌐 WB ({region_code}): выбери регион в шапке сайта, потом Enter.")
+        _ask("   Enter, когда регион выбран...")
+        while d.get_log("performance"):
+            pass
+        d.refresh()
+        time.sleep(8)
+        for entry in d.get_log("performance"):
+            try:
+                msg = json.loads(entry["message"])["message"]
+                if msg.get("method") == "Network.requestWillBeSent":
+                    url = msg["params"]["request"]["url"]
+                    if "dest=" in url:
+                        q = up.parse_qs(up.urlparse(url).query)
+                        if "dest" in q:
+                            dest = int(q["dest"][0])
+            except Exception:
+                continue
+        if dest is not None:
+            print(f"   ✅ WB dest: {dest}")
+    finally:
+        try:
+            d.quit()
+        except Exception:
+            pass
+        kill_pid_tree(pid)
+    return dest
+
+
+def browser_fetch_prices(region_code, skus):
+    """Вилка 403: открывает профиль Ozon, по каждому SKU ждёт цену (капчу решает юзер)."""
+    profile = _profile_dir(region_code)
+    if not profile.exists():
+        print(f"   ❌ профиль {profile} не найден")
+        return []
+    d = _new_driver(profile)
+    pid = getattr(d, "browser_pid", None)
+    out = []
+    try:
+        for sku in skus:
+            p = _wait_card(d, sku, label="вилка: ")
+            if p:
+                out.append({"sku": sku, "price": p, "price_card": p, "price_regular": None,
+                            "price_original": None, "price_base": p, "currency": "RUB",
+                            "is_available": True, "source": "browser:DOM"})
+        try:
+            (profile / "cookies.json").write_text(
+                json.dumps(d.get_cookies(), ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    finally:
+        try:
+            d.quit()
+        except Exception:
+            pass
+        kill_pid_tree(pid)
+    return out
