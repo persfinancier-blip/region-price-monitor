@@ -1,0 +1,110 @@
+[
+  {
+    "id": 1,
+    "run_id": 1,
+    "product_id": 1,
+    "region_id": 1,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 2,
+    "run_id": 1,
+    "product_id": 1,
+    "region_id": 2,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 3,
+    "run_id": 1,
+    "product_id": 1,
+    "region_id": 3,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 4,
+    "run_id": 1,
+    "product_id": 2,
+    "region_id": 1,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 5,
+    "run_id": 1,
+    "product_id": 2,
+    "region_id": 2,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 6,
+    "run_id": 1,
+    "product_id": 2,
+    "region_id": 3,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 7,
+    "run_id": 1,
+    "product_id": 3,
+    "region_id": 1,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 8,
+    "run_id": 1,
+    "product_id": 3,
+    "region_id": 2,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 9,
+    "run_id": 1,
+    "product_id": 3,
+    "region_id": 3,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 10,
+    "run_id": 1,
+    "product_id": 4,
+    "region_id": 1,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.503546+00:00"
+  },
+  {
+    "id": 11,
+    "run_id": 1,
+    "product_id": 4,
+    "region_id": 2,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.523347+00:00"
+  },
+  {
+    "id": 12,
+    "run_id": 1,
+    "product_id": 4,
+    "region_id": 3,
+    "status": "failed",
+    "attempts": 0,
+    "locked_at": "2026-07-23T21:55:19.523347+00:00"
+  }
+]
