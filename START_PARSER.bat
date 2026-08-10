@@ -37,8 +37,8 @@ if not exist "%REPO_DIR%\.git" (
   if errorlevel 1 goto :clone_failed
 )
 
-rem A checkout created by an older launcher may not contain the helper yet.
-rem Bootstrap it using the same fail-closed rules, then hand over to Python.
+rem Older checkouts may not contain the Python sync helper yet.
+rem Bootstrap them with the same non-destructive policy.
 if not exist "%REPO_DIR%\tools\local_delivery.py" goto :bootstrap_helper
 goto :run_helper
 
@@ -47,22 +47,35 @@ echo [INFO] Local checkout is older than the sync helper. Bootstrapping safely..
 set "ACTUAL_REMOTE="
 for /f "usebackq delims=" %%R in (`git -C "%REPO_DIR%" remote get-url origin 2^>nul`) do set "ACTUAL_REMOTE=%%R"
 if not defined ACTUAL_REMOTE goto :wrong_remote
-if /I "%ACTUAL_REMOTE%"=="%REPO_URL%" goto :bootstrap_branch
-if /I "%ACTUAL_REMOTE%"=="%REPO_URL_ALT%" goto :bootstrap_branch
+if /I "%ACTUAL_REMOTE%"=="%REPO_URL%" goto :bootstrap_clean
+if /I "%ACTUAL_REMOTE%"=="%REPO_URL_ALT%" goto :bootstrap_clean
 goto :wrong_remote
 
-:bootstrap_branch
-set "ACTUAL_BRANCH="
-for /f "usebackq delims=" %%B in (`git -C "%REPO_DIR%" symbolic-ref --quiet --short HEAD 2^>nul`) do set "ACTUAL_BRANCH=%%B"
-if /I not "%ACTUAL_BRANCH%"=="%BRANCH%" goto :wrong_branch
-
+:bootstrap_clean
 set "DIRTY_TRACKED="
 for /f "usebackq delims=" %%S in (`git -C "%REPO_DIR%" status --porcelain=v1 --untracked-files=no 2^>nul`) do set "DIRTY_TRACKED=1"
 if defined DIRTY_TRACKED goto :dirty_checkout
 
-git -C "%REPO_DIR%" fetch --prune origin "%BRANCH%"
+echo [INFO] Fetching implementation branch...
+git -C "%REPO_DIR%" fetch --prune origin "+refs/heads/%BRANCH%:refs/remotes/origin/%BRANCH%"
 if errorlevel 1 goto :fetch_failed
 
+set "ACTUAL_BRANCH="
+for /f "usebackq delims=" %%B in (`git -C "%REPO_DIR%" symbolic-ref --quiet --short HEAD 2^>nul`) do set "ACTUAL_BRANCH=%%B"
+if /I "%ACTUAL_BRANCH%"=="%BRANCH%" goto :bootstrap_ff
+
+echo [INFO] Switching clean checkout from %ACTUAL_BRANCH% to %BRANCH% ...
+git -C "%REPO_DIR%" show-ref --verify --quiet "refs/heads/%BRANCH%"
+if errorlevel 1 goto :create_target_branch
+git -C "%REPO_DIR%" switch "%BRANCH%"
+if errorlevel 1 goto :branch_switch_failed
+goto :bootstrap_ff
+
+:create_target_branch
+git -C "%REPO_DIR%" switch --track -c "%BRANCH%" "origin/%BRANCH%"
+if errorlevel 1 goto :branch_switch_failed
+
+:bootstrap_ff
 git -C "%REPO_DIR%" merge-base --is-ancestor HEAD "origin/%BRANCH%" >nul 2>nul
 if errorlevel 1 goto :diverged_checkout
 
@@ -107,23 +120,23 @@ echo Existing checkout points to an unexpected Git origin.
 echo Nothing was changed.
 goto :fail
 
-:wrong_branch
-echo.
-echo [ERROR] LOCAL_CHECKOUT_WRONG_BRANCH
-echo Existing checkout is not on branch %BRANCH%.
-echo Nothing was changed.
-goto :fail
-
 :dirty_checkout
 echo.
 echo [ERROR] LOCAL_CHECKOUT_DIRTY
 echo Existing checkout has tracked local edits. Nothing was overwritten.
 goto :fail
 
+:branch_switch_failed
+echo.
+echo [ERROR] LOCAL_CHECKOUT_BRANCH_SWITCH_FAILED
+echo Could not safely switch to %BRANCH%.
+echo No reset, clean, or file deletion was attempted.
+goto :fail
+
 :diverged_checkout
 echo.
 echo [ERROR] LOCAL_CHECKOUT_DIVERGED
-echo Existing checkout has local commits or diverged history. No reset was attempted.
+echo Implementation branch has local commits or diverged history. No reset was attempted.
 goto :fail
 
 :clone_failed
