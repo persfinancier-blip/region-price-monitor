@@ -22,6 +22,17 @@ def run(*args: str, cwd: Path | None = None) -> None:
     )
 
 
+def output(*args: str, cwd: Path | None = None) -> str:
+    return subprocess.run(
+        args,
+        cwd=str(cwd) if cwd else None,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+
+
 class LocalDeliveryGitTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -81,6 +92,38 @@ class LocalDeliveryGitTests(unittest.TestCase):
         )
         self.assertEqual((self.checkout / "file.txt").read_text(), "v2\n")
         self.assertEqual(secret.read_bytes(), b"KEEP-ME")
+
+    def test_clean_wrong_branch_switches_to_configured_target(self) -> None:
+        local_delivery.ensure_checkout(
+            self.checkout, str(self.remote), "work/g01-implementation"
+        )
+        run("git", "switch", "-c", "legacy-local", cwd=self.checkout)
+        self.assertEqual(output("git", "branch", "--show-current", cwd=self.checkout), "legacy-local")
+
+        self.assertTrue(
+            local_delivery.sync_checkout(
+                self.checkout, str(self.remote), "work/g01-implementation"
+            )
+        )
+        self.assertEqual(
+            output("git", "branch", "--show-current", cwd=self.checkout),
+            "work/g01-implementation",
+        )
+
+    def test_dirty_wrong_branch_stops_before_switch(self) -> None:
+        local_delivery.ensure_checkout(
+            self.checkout, str(self.remote), "work/g01-implementation"
+        )
+        run("git", "switch", "-c", "legacy-local", cwd=self.checkout)
+        (self.checkout / "file.txt").write_text("local edit\n", encoding="utf-8")
+
+        with self.assertRaises(local_delivery.DeliveryError) as ctx:
+            local_delivery.sync_checkout(
+                self.checkout, str(self.remote), "work/g01-implementation"
+            )
+        self.assertEqual(ctx.exception.code, "LOCAL_CHECKOUT_DIRTY")
+        self.assertEqual(output("git", "branch", "--show-current", cwd=self.checkout), "legacy-local")
+        self.assertEqual((self.checkout / "file.txt").read_text(), "local edit\n")
 
     def test_dirty_tracked_checkout_stops_without_overwrite(self) -> None:
         local_delivery.ensure_checkout(
@@ -145,6 +188,7 @@ class LocalDeliveryGitTests(unittest.TestCase):
         self.assertIn(b"%~dp0region-price-monitor", data)
         self.assertIn(b":bootstrap_helper", data)
         self.assertIn(b"fetch --prune origin", data)
+        self.assertIn(b"switch --track -c", data)
         self.assertIn(b"merge --ff-only", data)
         self.assertIn(b"LOCAL_CHECKOUT_DIRTY", data)
         self.assertIn(b"LOCAL_CHECKOUT_DIVERGED", data)
