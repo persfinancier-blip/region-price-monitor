@@ -95,7 +95,7 @@ def ensure_checkout(repo: Path, remote: str, branch: str) -> bool:
     return True
 
 
-def validate_checkout(repo: Path, remote: str, branch: str) -> None:
+def validate_checkout(repo: Path, remote: str) -> None:
     if not (repo / ".git").is_dir():
         raise DeliveryError("LOCAL_CHECKOUT_INVALID", "В локальной папке отсутствует .git.")
 
@@ -108,13 +108,6 @@ def validate_checkout(repo: Path, remote: str, branch: str) -> None:
             "Локальная папка смотрит на другой origin. Обновление остановлено без изменений файлов.",
         )
 
-    current = _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
-    if current.returncode != 0 or current.stdout.strip() != branch:
-        raise DeliveryError(
-            "LOCAL_CHECKOUT_WRONG_BRANCH",
-            f"Ожидалась ветка '{branch}'. Скрипт не переключает ветки молча.",
-        )
-
 
 def assert_clean_tracked(repo: Path) -> None:
     status = _git(repo, "status", "--porcelain=v1", "--untracked-files=no")
@@ -125,33 +118,67 @@ def assert_clean_tracked(repo: Path) -> None:
         )
 
 
-def sync_checkout(repo: Path, remote: str, branch: str) -> bool:
-    """Безопасно fast-forward обновить checkout до origin/branch. True означает изменение HEAD."""
-    validate_checkout(repo, remote, branch)
-    assert_clean_tracked(repo)
-
-    fetch = _git(repo, "fetch", "--prune", "origin", branch, check=False)
+def _fetch_target_branch(repo: Path, branch: str) -> str:
+    remote_ref = f"origin/{branch}"
+    refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+    fetch = _git(repo, "fetch", "--prune", "origin", refspec, check=False)
     if fetch.returncode != 0:
         raise DeliveryError(
             "GIT_FETCH_FAILED",
             "Не удалось получить обновления. Проверьте интернет/Git-авторизацию. Локальные файлы не изменены.",
         )
-
-    remote_ref = f"origin/{branch}"
-    local_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
     remote_head_cp = _git(repo, "rev-parse", remote_ref, check=False)
     if remote_head_cp.returncode != 0:
         raise DeliveryError("REMOTE_BRANCH_NOT_FOUND", f"Удалённая ветка '{branch}' не найдена.")
-    remote_head = remote_head_cp.stdout.strip()
+    return remote_ref
 
-    if local_head == remote_head:
+
+def ensure_target_branch(repo: Path, branch: str, remote_ref: str) -> bool:
+    """Безопасно переключиться на явно заданную implementation branch. Старые ветки/commits не удаляются."""
+    current = _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    current_branch = current.stdout.strip() if current.returncode == 0 else ""
+    if current_branch == branch:
         return False
+
+    assert_clean_tracked(repo)
+    local_target = _git(repo, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False)
+    if local_target.returncode == 0:
+        switch = _git(repo, "switch", branch, check=False)
+    else:
+        switch = _git(repo, "switch", "--track", "-c", branch, remote_ref, check=False)
+    if switch.returncode != 0:
+        raise DeliveryError(
+            "LOCAL_CHECKOUT_BRANCH_SWITCH_FAILED",
+            f"Не удалось безопасно переключиться на '{branch}'. Никакой reset/clean не выполнялся.",
+        )
+
+    switched = _git(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+    if switched.returncode != 0 or switched.stdout.strip() != branch:
+        raise DeliveryError(
+            "LOCAL_CHECKOUT_BRANCH_SWITCH_FAILED",
+            f"После переключения активная ветка не равна '{branch}'.",
+        )
+    return True
+
+
+def sync_checkout(repo: Path, remote: str, branch: str) -> bool:
+    """Безопасно перейти на configured branch и fast-forward обновить до origin/branch."""
+    validate_checkout(repo, remote)
+    assert_clean_tracked(repo)
+    remote_ref = _fetch_target_branch(repo, branch)
+    switched = ensure_target_branch(repo, branch, remote_ref)
+    assert_clean_tracked(repo)
+
+    local_head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    remote_head = _git(repo, "rev-parse", remote_ref).stdout.strip()
+    if local_head == remote_head:
+        return switched
 
     ancestor = _git(repo, "merge-base", "--is-ancestor", "HEAD", remote_ref, check=False)
     if ancestor.returncode != 0:
         raise DeliveryError(
             "LOCAL_CHECKOUT_DIVERGED",
-            "Локальная ветка содержит собственные commits или разошлась с облачной. Деструктивный reset запрещён.",
+            "Implementation branch содержит собственные commits или разошлась с облачной. Деструктивный reset запрещён.",
         )
 
     merge = _git(repo, "merge", "--ff-only", remote_ref, check=False)
