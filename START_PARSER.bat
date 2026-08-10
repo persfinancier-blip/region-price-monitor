@@ -37,6 +37,10 @@ if not exist "%REPO_DIR%\.git" (
   if errorlevel 1 goto :clone_failed
 )
 
+call :recover_index_lock
+if errorlevel 2 goto :index_lock_active
+if errorlevel 1 goto :index_lock_cleanup_failed
+
 rem Older checkouts may not contain the Python sync helper yet.
 rem Bootstrap them with the same non-destructive policy.
 if not exist "%REPO_DIR%\tools\local_delivery.py" goto :bootstrap_helper
@@ -93,6 +97,19 @@ if not "%RC%"=="0" goto :runtime_failed
 
 exit /b 0
 
+:recover_index_lock
+if not exist "%REPO_DIR%\.git\index.lock" exit /b 0
+echo [INFO] Git index.lock detected. Checking for an active git.exe process...
+tasklist /FI "IMAGENAME eq git.exe" /NH 2>nul | find /I "git.exe" >nul
+if not errorlevel 1 exit /b 2
+timeout /t 2 /nobreak >nul
+tasklist /FI "IMAGENAME eq git.exe" /NH 2>nul | find /I "git.exe" >nul
+if not errorlevel 1 exit /b 2
+echo [INFO] No active git.exe process found. Removing stale index.lock only...
+del /f /q "%REPO_DIR%\.git\index.lock" >nul 2>nul
+if exist "%REPO_DIR%\.git\index.lock" exit /b 1
+exit /b 0
+
 :git_missing
 echo.
 echo [ERROR] GIT_NOT_FOUND
@@ -126,11 +143,24 @@ echo [ERROR] LOCAL_CHECKOUT_DIRTY
 echo Existing checkout has tracked local edits. Nothing was overwritten.
 goto :fail
 
+:index_lock_active
+echo.
+echo [ERROR] LOCAL_GIT_INDEX_LOCK_ACTIVE
+echo .git\index.lock exists and git.exe is currently running.
+echo Close Git operations, Git GUI/terminal activity, and retry. Nothing was deleted.
+goto :fail
+
+:index_lock_cleanup_failed
+echo.
+echo [ERROR] LOCAL_GIT_INDEX_LOCK_CLEANUP_FAILED
+echo Stale .git\index.lock could not be removed. Nothing else was changed.
+goto :fail
+
 :branch_switch_failed
 echo.
 echo [ERROR] LOCAL_CHECKOUT_BRANCH_SWITCH_FAILED
 echo Could not safely switch to %BRANCH%.
-echo No reset, clean, or file deletion was attempted.
+echo No reset, clean, or source-file deletion was attempted.
 goto :fail
 
 :diverged_checkout
