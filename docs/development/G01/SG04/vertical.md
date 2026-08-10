@@ -1,199 +1,228 @@
-# G01.SG04 — Ozon Proxy-First Regional Price
+# G01.SG04 — Ozon Proxy-First Regional Price — repaired C02
 
 Parent Goal: G01 / Issue #30
 Parent Subgoal: Issue #34
+Active planning cycle: `C02.I01`
 Status: proposed vertical planning; implementation blocked until full G01 compile PASS.
+
+## Repair reason
+C01 incorrectly equated `Selenium/Chrome` with manual legacy behavior and prohibited browser use in the primary path. The corrected contract distinguishes **engine technology** from **human interaction**:
+
+- `curl_cffi` may be used autonomously;
+- hidden/headless Selenium/Chrome may be used autonomously;
+- either may establish/refresh Ozon session/location context if runtime evidence supports it;
+- **human login, manual city/PVZ selection, Enter prompts, manual captcha solving and manually maintained per-city profiles remain forbidden in primary** and belong only to SG05 explicit legacy fallback/support.
+
+C01 Prompt files are retained as immutable history. C02 Prompt files are the active repaired generation.
 
 ## Subgoal contract
 
 ### Purpose
-Replace routine manually warmed Ozon city profiles/cookies with an autonomous proxy-first Ozon path. If Ozon needs session/context beyond the city proxy, that context must be bootstrapped and verified automatically.
+Replace routine manually warmed Ozon city profiles/cookies with an autonomous proxy-first Ozon path. If Ozon requires a real browser to establish usable session/location state, the primary path may use hidden/headless Selenium/Chrome automatically through the same city ProxyContext.
 
 ### Input
-- accepted SG01 `ProductSet` Ozon subset;
-- accepted SG01 `CityRecord` with `city`, `proxy`, `proxy_user`, `proxy_password`, optional `wb_dest` (irrelevant to Ozon);
-- accepted SG02 `ProxyContext` + curl_cffi transport adapter;
-- current Ozon product URL / `webPrice` parsing behavior as implementation evidence target.
+- accepted SG01 Ozon `ProductSet` subset;
+- accepted SG01 `CityRecord`: `city`, `proxy`, `proxy_user`, `proxy_password`, optional `wb_dest`;
+- accepted SG02 `ProxyContext` as the single proxy authority plus existing HTTP adapters;
+- current Ozon product URL / `webPrice` behavior as runtime evidence target.
 
 ### Output
-For every requested `ozon sku × city`, one typed outcome containing city/product identity and either an endpoint-evidenced regional price or an explicit failure. The normal path requires no manually prepared Ozon browser profile/cookie file and repeated runs require no browser action.
+For every requested `ozon sku × city`, one typed outcome containing city/product identity and either an evidenced requested-city price or explicit failure. The normal path requires no manually prepared profile/cookie file and zero human browser actions. Hidden/headless browser execution is allowed when automatic and proxy-bound.
 
 ### Acceptance
-- every normal-path Ozon network call uses the selected city `ProxyContext`;
-- no manually pre-warmed `cookies.json` is a prerequisite of normal operation;
-- any required cookies/session/location context are created automatically;
-- the effective Ozon regional context is verified sufficiently to prevent returning a price for an unknown/wrong city;
-- price parsing remains tied to the requested product `webPrice` state rather than arbitrary ₽ text;
-- transport, anti-bot/session, context mismatch and semantic no-price failures remain distinct;
-- repeated runs can recreate or refresh required session/context without human browser action;
-- no additional mandatory CityRecord field is introduced unless runtime evidence proves G01 cannot be met without canonical contract repair.
+- every primary Ozon network path derives proxy routing/authentication from selected-city SG02 `ProxyContext`;
+- no manually pre-warmed `cookies.json` or profile is a prerequisite;
+- any required cookies/session/location context are created automatically by the accepted engine strategy;
+- the engine may be `curl_cffi`, hidden/headless Selenium/Chrome, or a bounded evidenced combination;
+- no direct-network fallback when ProxyContext is supplied;
+- no human login, manual city/PVZ selection, Enter prompt, visible-window prerequisite or human captcha solve;
+- effective Ozon regional context is verified sufficiently to prevent a price for unknown/wrong city;
+- price parsing remains tied to requested-product `webPrice` state;
+- transport/browser/context/session/semantic failures remain explicit;
+- repeated runs can recreate/refresh context automatically, including hidden browser lifecycle when needed;
+- no additional mandatory CityRecord field unless runtime evidence forces canonical contract repair.
 
-## Dependency boundary
-SG04 consumes SG01 + SG02. It does not own proxy construction, WB behavior, legacy fallback preservation, persistence or scheduling.
+## Dependency/ownership boundary
+- SG02 owns canonical ProxyContext and current HTTP transport adapters. SG04 may adapt that same ProxyContext into browser-engine settings but may not invent a second proxy source of truth.
+- SG04 owns autonomous Ozon context engine, requested-city verification and price semantics.
+- SG05 owns visible/manual legacy profile-cookie/browser fallback and operator maintenance tools. **Selenium itself is not SG05 ownership.**
+- SG06 owns persistence, matrix orchestration and scheduler-ready run.
 
 ---
 
-# PR01 — Current Ozon regional/session evidence and context contract
+# PR01 — Current Ozon regional/session evidence and autonomous-engine contract
 
 ## Purpose
-Determine, from current live behavior and sanitized fixtures, what a fresh proxy-bound Ozon session needs in order to obtain a product price for the requested city and how the effective region can be verified.
+Determine from current runtime evidence which automatic engine strategy can obtain requested-city Ozon context without manually warmed profiles.
 
 ### ST01 / T01 — Capture fresh-session proxy-first Ozon behavior
-Prompt: `prompts/work/G01-SG04/PR01-ST01-T01-C01-I01.md`
+Active Prompt: `prompts/work/G01-SG04/PR01-ST01-T01-C02.I01.md`
 
-Input: representative Ozon SKUs + at least representative city proxy configurations + SG02 transport.
+Input: representative Ozon SKUs + city proxies + SG02 ProxyContext.
 
 Output:
-- sanitized HTTP/session evidence from a fresh state with no manually warmed profile;
-- observed cookies/headers/page-state/location signals required by successful product requests;
-- observed blocked/challenge/no-price cases;
-- no committed credentials or account tokens.
+- sanitized evidence from no-legacy state for `curl_cffi` and, where needed, automatic hidden/headless Selenium/Chrome;
+- observed cookies/headers/browser/session/location signals;
+- proof or failure of browser ProxyContext binding;
+- blocked/challenge/no-price cases;
+- no credentials/tokens.
 
 Acceptance:
-- probes start without legacy `cookies.json`;
-- all calls use city ProxyContext;
-- observed facts, not remembered Ozon behavior, are recorded;
-- evidence includes enough regional/location signal to attempt city-binding proof or explicitly says it cannot be proven.
+- probes start without legacy `cookies.json`/prepared profile;
+- HTTP and browser probes use the same city ProxyContext authority;
+- hidden browser requires zero human interaction;
+- evidence identifies which engine/sequence is sufficient or explicitly fails closed;
+- proxy IP alone is not accepted as requested-city proof.
 
-Failure: evidence unavailable -> typed `OZON_CONTEXT_CONTRACT_UNPROVEN`; downstream context implementation must not guess.
+Failure verdicts: `OZON_CONTEXT_CONTRACT_UNPROVEN`, `OZON_BROWSER_PROXY_BINDING_UNPROVEN`.
 
-### ST02 / T01 — Define evidenced Ozon regional bootstrap and verification contract
-Prompt: `prompts/work/G01-SG04/PR01-ST02-T01-C01-I01.md`
+### ST02 / T01 — Define evidenced autonomous engine/bootstrap and city-verification contract
+Active Prompt: `prompts/work/G01-SG04/PR01-ST02-T01-C02.I01.md`
 
-Input: accepted ST01 evidence.
+Input: accepted C02 ST01 evidence.
 
-Output: one deterministic contract stating:
-- whether proxy-only fresh session is sufficient or additional automatic bootstrap is required;
-- exact observed bootstrap state that may be created automatically;
-- exact evidence used to accept/reject effective city binding;
-- typed `OZON_REGION_CONTEXT_UNPROVEN` when requested city cannot be verified from the minimum G01 CityRecord/current Ozon behavior.
+Output: one deterministic contract defining:
+- accepted engine strategy: `curl_cffi`, hidden Selenium/Chrome, or bounded combination;
+- evidenced engine order/selection rule without assuming HTTP-first/browser-first;
+- automatic state that may be created/transferred between engines;
+- exact requested-city verification signal;
+- fail-closed engine/context verdicts.
 
 Acceptance:
-- no manual login/PVZ selection is normalized into the primary path;
-- no hidden new mandatory CityRecord field;
-- no assumption that proxy geolocation alone equals Ozon effective delivery context;
-- any required additional user field triggers canonical Goal/Subgoal contract review rather than Prompt widening.
+- hidden browser is allowed; human browser work is forbidden;
+- every engine consumes the same ProxyContext authority;
+- no manual login/PVZ/profile prerequisite;
+- no hidden mandatory CityRecord field;
+- wrong/unverified city never succeeds.
 
 ---
 
-# PR02 — Automatic proxy-bound Ozon session/context bootstrap
+# PR02 — Automatic proxy-bound Ozon context engine
 
 ## Purpose
-Implement the evidenced fresh-session/bootstrap contract entirely through SG02 transport and produce a reusable, secret-safe OzonContext for one CityRecord.
+Implement the accepted C02 autonomous engine strategy and produce a reusable verified `OzonContext` for one CityRecord.
 
-### ST01 / T01 — Bootstrap fresh Ozon session through ProxyContext
-Prompt: `prompts/work/G01-SG04/PR02-ST01-T01-C01-I01.md`
+### ST01 / T01 — Build autonomous OzonContext through ProxyContext
+Active Prompt: `prompts/work/G01-SG04/PR02-ST01-T01-C02.I01.md`
 
-Input: accepted PR01 bootstrap contract + CityRecord + SG02 curl_cffi adapter.
+Input: accepted PR01 C02 engine contract + CityRecord + SG02 ProxyContext/interfaces.
 
-Output: `OzonContext` containing only automatically created in-memory/session state needed by later Ozon requests plus safe city identity/status.
+Output: `OzonContext` containing safe city identity, engine provenance, automatically created session/browser state and typed bootstrap status.
 
 Acceptance:
-- starts with no manual profile/cookie file;
-- every bootstrap call uses the supplied ProxyContext;
-- cookies/session state returned by Ozon may be captured automatically but secrets are not logged;
-- anti-bot/HTTP/transport/bootstrap failures are typed;
-- no direct-network fallback.
+- no legacy `ozon_profile_dir`/`cookies.json` prerequisite;
+- `curl_cffi` uses SG02 adapter;
+- hidden/headless Selenium/Chrome, when required, receives proxy config derived only from the same ProxyContext;
+- inability to prove browser proxy binding fails `OZON_BROWSER_PROXY_BINDING_UNPROVEN` rather than going direct;
+- no human interaction;
+- browser/driver lifetime, retries and timeouts bounded; child processes cleaned up;
+- automatic browser cookies may be reused/transferred only when evidenced.
 
-### ST02 / T01 — Verify city context and support autonomous refresh/retry
-Prompt: `prompts/work/G01-SG04/PR02-ST02-T01-C01-I01.md`
+### ST02 / T01 — Verify city context and support autonomous refresh/rebootstrap
+Active Prompt: `prompts/work/G01-SG04/PR02-ST02-T01-C02.I01.md`
 
-Input: fresh/reused OzonContext + accepted PR01 verification rule.
+Input: fresh/reused C02 OzonContext + accepted verification rule.
 
 Output:
-- verified context bound to requested `city`, or explicit context mismatch/unproven failure;
-- bounded automatic refresh/rebootstrap behavior for expired/rejected session state;
-- repeat-run behavior that requires no browser action.
+- verified context bound to requested city or typed mismatch/unproven failure;
+- bounded automatic refresh/rebootstrap across accepted engine strategy;
+- repeat-run behavior with zero human action.
 
 Acceptance:
-- wrong/unverifiable city never becomes successful regional price;
-- refresh never silently changes city identity;
-- no manual login/PVZ/browser action in primary path;
-- no infinite retry loop;
-- failure remains typed and secret-free.
+- wrong/unverifiable city never succeeds;
+- every refresh remains on same CityRecord ProxyContext, including browser instances;
+- challenge requiring human action becomes typed primary failure;
+- no direct networking, city migration or implicit SG05 fallback;
+- browser processes/state cleaned up deterministically.
 
 ---
 
 # PR03 — Ozon regional price parsing and semantic outcomes
 
 ## Purpose
-Use verified OzonContext to fetch the requested product and preserve the existing high-signal `webPrice` parser while making success/failure classification explicit.
+Keep price semantics independent of the autonomous engine that produced accepted content/state.
 
-### ST01 / T01 — Validate and preserve requested-product webPrice parsing
-Prompt: `prompts/work/G01-SG04/PR03-ST01-T01-C01-I01.md`
+### ST01 / T01 — Validate engine-neutral requested-product webPrice parsing
+Active Prompt: `prompts/work/G01-SG04/PR03-ST01-T01-C02.I01.md`
 
-Input: sanitized successful product-page fixtures obtained under accepted context.
+Input: sanitized successful product content/state under verified C02 OzonContext.
 
-Output: deterministic parser for requested SKU price fields (`price`, card/regular/original/base where present), currency and availability as evidenced by current `webPrice` state.
-
-Acceptance:
-- requested product `webPrice` state remains the semantic source;
-- unrelated recommendation/installment ₽ values are not parsed;
-- malformed/missing widget is explicit semantic failure;
-- no networking or session bootstrap inside parser.
-
-### ST02 / T01 — Classify Ozon transport, context and semantic failures
-Prompt: `prompts/work/G01-SG04/PR03-ST02-T01-C01-I01.md`
-
-Input: SG02 TransportOutcome + OzonContext verification state + parser output.
-
-Output: typed per-SKU Ozon outcome distinguishing success, context mismatch/unproven, proxy/auth/connect/timeout/HTTP, anti-bot/session rejection, product/no-price/malformed page and unexpected parser failure.
+Output: deterministic requested-SKU price fields or explicit semantic failure.
 
 Acceptance:
-- broad exception is not blindly returned as `403`;
-- `200_no_price` is not a proxy failure;
-- failed unit preserves requested SKU and city;
-- no failure becomes a valid-looking zero/empty price.
+- equivalent accepted HTTP/browser content yields equivalent semantic result;
+- requested-product `webPrice` remains authority;
+- no generic page-wide ₽ scraping;
+- no networking/browser control inside parser.
+
+### ST02 / T01 — Classify Ozon transport/browser/context/semantic failures
+Active Prompt: `prompts/work/G01-SG04/PR03-ST02-T01-C02.I01.md`
+
+Input: SG02 transport facts where applicable + hidden-browser outcome where applicable + context verification + parser output.
+
+Output: typed per-SKU outcome distinguishing success, proxy/auth/connect/timeout/HTTP, browser startup/proxy-binding/navigation/lifecycle, context mismatch/unproven, anti-bot/session/human-action-required, no-price/malformed page and unexpected parser failure.
+
+Acceptance:
+- broad failures do not collapse into synthetic `403`;
+- browser proxy-binding failure explicit;
+- human-action-required challenge explicit, not waiting state;
+- requested SKU/city retained;
+- no failure looks like valid zero/empty price.
 
 ---
 
 # PR04 — Ozon collector integration and SG04 closure
 
 ## Purpose
-Bind ProductSet + CitySet + SG02 + automatic OzonContext + parser/outcomes into the actual normal Ozon collector and prove autonomous repeated operation.
+Bind ProductSet + CitySet + SG02 + repaired autonomous C02 OzonContext + parser/outcomes into the primary collector and prove autonomous repeated operation.
 
-### ST01 / T01 — Integrate proxy-first Ozon product-city observations
-Prompt: `prompts/work/G01-SG04/PR04-ST01-T01-C01-I01.md`
+### ST01 / T01 — Integrate autonomous proxy-first Ozon product-city observations
+Active Prompt: `prompts/work/G01-SG04/PR04-ST01-T01-C02.I01.md`
 
-Input: Ozon ProductSet subset + CitySet + accepted PR02/PR03 interfaces.
+Input: Ozon ProductSet subset + CitySet + accepted C02 PR02/PR03 interfaces.
 
 Output: one typed outcome for each requested `ozon sku × city`, with regional price on success or explicit failure.
 
 Acceptance:
-- collector does not require `ozon_profile_dir`/`cookies.json` in primary path;
-- each city creates/uses its own verified ProxyContext/OzonContext;
-- one product/city failure does not erase siblings;
-- no automatic browser launch in normal path;
-- legacy profile path is untouched for SG05 ownership.
+- collector requires no manually prepared profile/cookies;
+- each city uses its own ProxyContext/OzonContext;
+- accepted engine may automatically use hidden/headless Selenium/Chrome;
+- hidden browser does not imply SG05 fallback;
+- legacy `load_cookies`, `warm_region`, `browser_fetch_prices` are not primary prerequisites or automatic manual repair;
+- challenges requiring humans remain explicit failure and do not auto-cross into SG05;
+- siblings survive individual failures.
 
-### ST02 / T01 — Prove no-manual-warm repeated-run contract and reverse assembly
-Prompt: `prompts/work/G01-SG04/PR04-ST02-T01-C01-I01.md`
+### ST02 / T01 — Prove no-human-work repeated-run contract and reverse assembly
+Active Prompt: `prompts/work/G01-SG04/PR04-ST02-T01-C02.I01.md`
 
-Input: all SG04 accepted outputs/evidence.
+Input: all accepted SG04 C02 outputs/evidence.
 
-Output: acceptance/evidence map and reverse composition `Prompt → Task → Stage → Process → SG04 → G01 contribution`.
+Output: acceptance/evidence map and reverse composition `C02 Prompt → Task → Stage → Process → SG04 → G01 contribution`.
 
 PASS requires:
-- fresh first run succeeds for a verified city without manually warmed cookies/profile;
-- a repeated run can succeed/rebootstrap/refresh without human action;
-- city proxy use and context verification are proven;
-- failures are explicit;
-- no scope absorption from SG05/SG06.
+- fresh first run begins without legacy cookies/profile and can reach a verified-city price or explicit typed failure through accepted autonomous engine;
+- hidden browser, when used, is proxy-bound and requires zero human action;
+- repeated run can reuse/rebootstrap/refresh automatically;
+- wrong/unverified city cannot succeed;
+- human-action-required challenges remain primary failures;
+- SG05 remains explicit manual fallback only;
+- no SG06 scope absorption.
 
 Fail-closed verdicts:
-- `OZON_CONTEXT_CONTRACT_UNPROVEN` — current fresh-session requirements not evidenced;
-- `OZON_REGION_CONTEXT_UNPROVEN` — effective requested city cannot be proven with current minimum contract;
-- `STRUCTURAL_REPAIR_REQUIRED` — decomposition/task boundary is wrong.
+- `OZON_CONTEXT_CONTRACT_UNPROVEN`;
+- `OZON_BROWSER_PROXY_BINDING_UNPROVEN`;
+- `OZON_REGION_CONTEXT_UNPROVEN`;
+- `STRUCTURAL_REPAIR_REQUIRED`.
 
 ---
 
-# Reverse composition check
+# Reverse composition check — C02
 
-PR01 produces evidence-backed regional/session semantics.
-PR02 produces an autonomous verified city-bound OzonContext.
-PR03 turns verified product responses into typed price outcomes.
-PR04 accounts for every requested Ozon product-city unit and proves repeat-run autonomy.
+PR01 produces evidence-backed engine/regional semantics.
+PR02 produces an autonomous proxy-bound, optionally hidden-browser-backed, verified OzonContext.
+PR03 turns engine-neutral accepted content into typed price outcomes.
+PR04 accounts for every requested Ozon product-city unit and proves no-human-work repeatability.
 
-Their composition satisfies SG04 without requiring SG05 legacy fallback or SG06 persistence/scheduler work.
+The composition satisfies SG04 while preserving SG02 as ProxyContext authority, SG05 as **manual/visible legacy** reserve ownership and SG06 as orchestration/persistence owner.
 
-SG04 contributes to G01 A01, A07, A10, A11 and A12. Full G01 PASS remains blocked until SG05, SG06 and final whole-contour compilation pass.
+SG04 contributes to G01 A01, A07, A10, A11 and A12. Full G01 PASS remains blocked until SG06 and final whole-contour compilation.
