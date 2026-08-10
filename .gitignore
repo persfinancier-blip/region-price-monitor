@@ -1,7 +1,10 @@
 ﻿venv/
 __pycache__/
 *.pyc
+.env
 parser/core/config.json
+parser/core/.env
+parser/core/local/
 parser/core/profiles/
 parser/core/debug/
 parser/results/*
