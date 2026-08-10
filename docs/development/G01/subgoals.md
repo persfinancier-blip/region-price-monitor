@@ -1,402 +1,251 @@
-# G01 — Proposed Subgoal Decomposition
+# G01 — Canonical Subgoal Decomposition
 
 Parent: Issue #30 / `docs/development/G01/goal.md`
+Planning PR: #37
 
-Status: **PROPOSED — SG-level decomposition only**
+## Current status
 
-This document does not authorize implementation. Processes, Stages, Tasks and Prompts are still absent; full Semantic / Virtual Compilation therefore has not yet been performed.
+All six Subgoals are decomposed vertically through Process -> Stage -> Task -> Prompt and have durable GitHub Issues/Prompt files.
 
-## Global decomposition invariants
+Whole-contour report: `docs/development/G01/full-compile-report.md`.
 
-1. Canonical implementation remains in `persfinancier-blip/region-price-monitor`.
-2. Existing useful behavior is reused where possible; rewrites require necessity.
-3. The local `C:\Dev\parser\_wb\_ozon\_delivery` and `Price-monitor` are reference/source inputs, not parallel production implementations.
-4. The new primary path is proxy-first. Existing browser/cookies/profile behavior remains fallback.
-5. User-facing inputs stay minimal. No new required city fields without demonstrated necessity.
-6. A child contract is valid only if its output contributes to a parent contract.
+Current proposed-generation verdict:
+
+**`SEMANTIC_COMPILE_PASS (WHOLE G01 PROPOSED GENERATION)`**
+
+This authorizes controlled execution of the planned development Tasks. It does not claim runtime marketplace/desktop/PostgreSQL acceptance has already passed; point-of-use evidence gates remain fail-closed.
+
+## Global invariants
+
+1. Canonical implementation repository is `persfinancier-blip/region-price-monitor`.
+2. GitHub contracts/issues/prompts are durable authority; chat summaries are not source of truth.
+3. Primary regional path is proxy-first.
+4. Primary city input stays minimal:
+   - `city` required;
+   - `proxy` required;
+   - `proxy_user` required;
+   - `proxy_password` required;
+   - `wb_dest` optional.
+5. SG02 `ProxyContext` is the single proxy routing/auth authority for primary network engines.
+6. Errors never become valid-looking price/zero-stock/availability data.
+7. Existing useful current behavior is preserved where required; legacy Ozon personalized authenticated cookies/profile remain SG05 fallback-only.
+8. Automatic legacy fallback switching is not required by G01 and must not be introduced implicitly.
+9. Runtime evidence that disproves a contract causes structural repair/recompilation, not hidden Prompt widening.
 
 ---
 
-# SG01 — Dynamic Products and Cities Input
+# SG01 — Dynamic Products and Cities Input / Issue #31
+
+Active generation: six `C01.I01` Prompts; Processes #38–#40; Tasks #41–#46.
+Vertical: `docs/development/G01/SG01/vertical.md`.
 
 ## Purpose
+Provide normalized dynamic ProductSet and CitySet from file or PostgreSQL without hardcoded operational city/product/proxy values.
 
-Give the parser one normalized input layer for products and cities, with both lists loadable from file or PostgreSQL and without hardcoded operational entries.
+## Input
+Configured product source + configured city source.
 
-## Input Contract
+## Output
+- `ProductSet = {wb:[...], ozon:[...]}`;
+- `CitySet` of canonical CityRecords using the minimum fields above.
 
-Available configured source for products and available configured source for cities.
+## Acceptance
+Products file/DB; cities file/DB; source-neutral downstream shape; omitted `wb_dest` valid; missing required proxy fields explicit; data changes require no code changes; primary CitySet not routed through legacy profile/dest warming gates.
 
-Product source: existing supported product identifiers and marketplace association.
-
-City source record minimum:
-
-```text
-city             required
-proxy            required
-proxy_user       required
-proxy_password   required
-wb_dest          optional
-```
-
-## Output Contract
-
-```text
-ProductSet
-CitySet
-```
-
-where every accepted city has the minimum fields above, `wb_dest` may be absent, and downstream code does not depend on whether records originated from file or DB.
-
-No city, product or proxy value required for normal operation is hardcoded in parser source.
-
-## Acceptance Criteria
-
-- products load from file;
-- products load from DB;
-- cities load from file;
-- cities load from DB;
-- identical downstream normalized contract for file and DB sources;
-- missing `wb_dest` is valid;
-- missing required proxy authentication/connectivity fields is a clear input error;
-- adding a city or product requires only source-data modification, not code modification.
-
-## Evidence
-
-- loader unit/contract tests for both source types;
-- representative file and DB fixtures;
-- normalized object comparison across equivalent file/DB inputs;
-- negative tests for missing required fields;
-- test proving omitted `wb_dest` is accepted.
-
-## Failure Conditions
-
-- cities remain stored only in config/code;
-- DB or file city source is missing;
-- downstream code has separate incompatible city models for file and DB;
-- `wb_dest` becomes required;
-- extra user fields are required without necessity.
+## Verdict
+`SEMANTIC_COMPILE_PASS`.
 
 ---
 
-# SG02 — Proxy-First Regional Transport
+# SG02 — Proxy-First Regional Transport / Issue #32
+
+Processes #47–#49; Tasks #50–#55.
+Active generation:
+- #50–#53: `C01.I01`;
+- #54–#55: repaired `C02.I01`.
+Repair: `docs/development/G01/SG02/C02-repair.md`.
 
 ## Purpose
+Provide one authenticated/redacted city-bound `ProxyContext` plus typed transport failures and current HTTP adapters.
 
-Provide the shared primary transport that executes marketplace traffic through the mobile proxy assigned to each city without requiring a manually warmed browser profile.
+## Input
+Canonical CityRecord + caller-owned request specification.
 
-## Input Contract
+## Output
+- single `ProxyContext` authority;
+- typed/redacted HTTP transport outcome;
+- `requests` adapter for current WB HTTP;
+- `curl_cffi` adapter for current Ozon HTTP;
+- cross-engine rule that any SG04 hidden browser derives its proxy settings from the same ProxyContext.
 
-```text
-CityRecord
-Marketplace request specification
-```
+## Acceptance
+Proxy authentication actually applied; no direct fallback under supplied ProxyContext; failures explicit; credentials redacted; no `wb_dest`, browser profile or cookie prerequisite for transport; no new CityRecord field.
 
-CityRecord supplies:
+Important C02 boundary: SG04 hidden/headless Selenium/Chrome does **not** need to transit through curl_cffi. Browser-specific proxy adaptation is SG04-owned but may not create a second proxy credential authority.
 
-```text
-city
-proxy
-proxy_user
-proxy_password
-wb_dest?
-```
-
-## Output Contract
-
-A marketplace request context/transport bound to the selected city's authenticated proxy, plus a structured request outcome that distinguishes successful response from transport/proxy/HTTP failure.
-
-The primary transport itself does not require manual browser interaction or pre-existing city cookies.
-
-## Acceptance Criteria
-
-- configured proxy authentication is actually applied to requests;
-- WB and Ozon collectors can consume the transport/context;
-- a proxy failure is explicit and not converted to empty business data;
-- normal primary execution does not call manual warming/profile-selection code;
-- proxy credentials are not emitted into result records or ordinary logs.
-
-## Evidence
-
-- transport tests with inspected proxy configuration;
-- failure-path tests for authentication/connectivity errors;
-- integration proof that collectors receive the city-bound transport;
-- proof that primary execution path has no manual warm dependency.
-
-## Failure Conditions
-
-- proxy fields are loaded but ignored;
-- one marketplace bypasses the configured city proxy on its primary path;
-- proxy failure is returned as valid zero/empty marketplace data;
-- primary path still requires manually prepared cookies/profile.
+## Verdict
+`SEMANTIC_COMPILE_PASS` after C02 repair.
 
 ---
 
-# SG03 — Wildberries Regional Price and Stock
+# SG03 — Wildberries Regional Price and Stock / Issue #33
+
+Processes #56–#59; Tasks #60–#66; seven active `C01.I01` Prompts.
+Vertical: `docs/development/G01/SG03/vertical.md`.
 
 ## Purpose
+Return regional WB price plus endpoint-evidenced stock/availability for every requested WB product/city through SG02.
 
-Upgrade the existing WB API path so each requested `product × city` returns regional price and regional stock/availability through SG02.
+## Input
+WB ProductSet subset + CityRecord + SG02 ProxyContext. `wb_dest` optional.
 
-## Input Contract
+## Output
+Per requested WB unit:
+- marketplace/product/city identity;
+- price;
+- stock quantity/availability as evidenced by current endpoint;
+- status/error.
 
-```text
-WB ProductSet subset
-CityRecord
-Proxy-first transport/context
-```
+If `wb_dest` exists it is sent; if absent the `dest` parameter is omitted rather than blocking the city.
 
-`wb_dest` is optional.
+## Acceptance
+Price + real stock semantics; zero stock distinct from failure; with/without dest; city proxy used; every requested WB unit accountable.
 
-## Output Contract
+## Runtime gate
+#60 must prove the current consumer endpoint stock schema/semantics. If not: `WB_STOCK_CONTRACT_UNPROVEN`; no guessed stock parser.
 
-For every requested WB product/city unit:
-
-```text
-marketplace = wb
-product identifier
-city
-price
-stock / availability
-status / error
-```
-
-If `wb_dest` exists, it is sent explicitly. If it does not exist, the request uses WB default/region behavior without treating omission as an error.
-
-The chosen stock/availability value is derived from the existing working WB endpoint response with minimum sufficient interpretation.
-
-## Acceptance Criteria
-
-- regional WB price returned for valid request;
-- stock/availability extracted from the same or directly associated working endpoint data;
-- valid zero stock is distinguishable from request/parser failure;
-- `wb_dest` present path works;
-- `wb_dest` absent path is valid and executes without forced placeholder value;
-- requests use the city proxy transport.
-
-## Evidence
-
-- captured/fixture WB responses covering price, positive stock, zero stock and error;
-- parser contract tests;
-- integration tests with and without `wb_dest`;
-- proof of proxy use in WB primary path.
-
-## Failure Conditions
-
-- only price is returned;
-- stock is inferred from price rather than endpoint stock/availability data;
-- missing `wb_dest` aborts the city;
-- errors become zero stock;
-- WB primary path bypasses proxy transport.
+## Verdict
+`SEMANTIC_COMPILE_PASS (RUNTIME_PROBE_REQUIRED)`.
 
 ---
 
-# SG04 — Ozon Proxy-First Regional Price
+# SG04 — Ozon Proxy-First Regional Price / Issue #34
+
+Processes #67–#70; Tasks #71–#78; eight active `C02.I01` Prompts. C01 is superseded history.
+Vertical: `docs/development/G01/SG04/vertical.md`.
 
 ## Purpose
+Implement the **new** autonomous Ozon proxy-first mechanism without requiring the personalized authenticated cookies/profile used by the current fallback.
 
-Replace manual city-cookie warming as the normal Ozon regional-price path with an autonomous proxy-first collection flow.
+## Input
+Ozon ProductSet subset + CityRecord + SG02 ProxyContext authority.
 
-## Input Contract
+## Output
+One typed Ozon price/failure outcome for every requested product/city from an accepted requested-city context.
 
-```text
-Ozon ProductSet subset
-CityRecord
-Proxy-first transport/context
-```
+## Autonomous engine boundary
+Runtime evidence may select:
+- curl_cffi;
+- hidden/headless Selenium/Chrome;
+- a bounded evidence-driven combination.
 
-## Output Contract
+Hidden browser is allowed in primary when it requires zero human interaction and uses browser proxy settings derived from SG02 ProxyContext.
 
-For every requested Ozon product/city unit:
+Forbidden in primary: manual login, manual city/PVZ selection, Enter prompts, visible-window prerequisite, human captcha solve, manually maintained per-city profile/cookies, or dependency on SG05 personalized authenticated cookies.
 
-```text
-marketplace = ozon
-product identifier
-city
-regional price
-status / error
-```
+Ordinary automatically issued technical HTTP/browser session state is allowed and is not the legacy authenticated user session.
 
-The normal path requires no user action to open Ozon and switch city before repeated collection.
+## Runtime gates
+- autonomous engine/sequence evidence;
+- hidden-browser ProxyContext binding if browser is used (`OZON_BROWSER_PROXY_BINDING_UNPROVEN` on failure);
+- requested-city verification (`OZON_REGION_CONTEXT_UNPROVEN` on failure);
+- first/repeated zero-human operation.
 
-If Ozon technically requires session/context bootstrap beyond the proxy, that bootstrap must be automatic inside the primary path and must not introduce new mandatory user fields unless later decomposition proves them unavoidable.
-
-## Acceptance Criteria
-
-- Ozon requests use the selected city proxy;
-- regional price is obtained without manually pre-warmed city cookies in the normal path;
-- any required session bootstrap is automatic;
-- transport/HTTP/parse failure remains explicit;
-- repeated runs do not require user browser action.
-
-## Evidence
-
-- Ozon fixture/integration responses for successful regional price and failures;
-- end-to-end primary-path test starting without manually warmed city profile;
-- repeat-run test using the same configured city input;
-- proof of proxy binding.
-
-## Failure Conditions
-
-- normal Ozon run still says to open browser/select city/update cookies;
-- proxy is configured but Ozon bypasses it;
-- Ozon failure is represented as a valid price/value;
-- solution adds manual per-city preparation under another name.
+## Verdict
+`SEMANTIC_COMPILE_PASS (RUNTIME_ENGINE_CONTEXT_PROBE_REQUIRED)`.
 
 ---
 
-# SG05 — Legacy Regional Fallback Preservation
+# SG05 — Legacy Regional Fallback Preservation / Issue #35
+
+Processes #79–#81; Tasks #82–#87; six active `C02.I01` Prompts. C01 is superseded history.
+Vertical: `docs/development/G01/SG05/vertical.md`.
 
 ## Purpose
+Preserve the **currently working** browser/profile/cookies regional mechanism as explicit reserve/support without making it a prerequisite of the new primary path.
 
-Preserve the current browser/cookies/profile regional mechanism as a usable reserve path while ensuring it is no longer the required normal path.
+## Critical compatibility invariant
+The current Ozon fallback requires **personalized authenticated cookies/tokens obtained after user-confirmed Ozon login**. These are secret runtime material and are not interchangeable with anonymous/generated cookies.
 
-## Input Contract
+This personalized authenticated requirement belongs to SG05 fallback only; SG04 new proxy-first is independent from it.
 
-Existing legacy warm/profile/cookies functionality and its existing configuration/artifacts.
+## Output
+Explicitly invokable authenticated Ozon fallback + operator support/refresh tools, including current profile/cookie flow and optional manual WB dest discovery.
 
-## Output Contract
+## Acceptance
+Current authenticated cookie/profile semantics preserved; invalid/expired fallback auth explicit; operator can intentionally refresh legacy login/profile; no raw tokens/cookies in Git/log/results/evidence; primary never invokes fallback implicitly; missing wb_dest stays valid primary input.
 
-A clearly reachable fallback mode/capability that can still execute the preserved legacy regional flow without being invoked as a prerequisite of proxy-first collection.
+## Runtime gate
+Visible desktop smoke using runtime-local authenticated profile/cookies without capturing secrets.
 
-Automatic fallback selection is not required by G01 unless later decomposition demonstrates it is necessary; preservation and explicit availability are sufficient.
-
-## Acceptance Criteria
-
-- existing usable legacy path is not deleted;
-- fallback can be invoked intentionally;
-- primary mode does not require fallback preparation;
-- fallback artifacts are separated from primary input requirements;
-- existing legacy behavior has regression coverage sufficient to detect accidental breakage.
-
-## Evidence
-
-- regression test/smoke evidence for legacy entrypoint;
-- primary-path test with no legacy profile present;
-- code/config mapping showing primary and fallback separation.
-
-## Failure Conditions
-
-- legacy path removed or silently broken;
-- fallback becomes mandatory initialization for primary mode;
-- primary city contract starts requiring legacy profile paths/cookies.
+## Verdict
+`SEMANTIC_COMPILE_PASS (LEGACY_AUTHENTICATED_DESKTOP_SMOKE_REQUIRED_AT_EXECUTION)`.
 
 ---
 
-# SG06 — Complete Matrix Run, Persistence and Repeatable Autonomous Operation
+# SG06 — Complete Matrix Run, Persistence and Autonomous Operation / Issue #36
+
+Processes #88–#91; Tasks #92–#101; ten active `C01.I01` Prompts.
+Vertical: `docs/development/G01/SG06/vertical.md`.
 
 ## Purpose
+Compose SG01–SG05 into one primary run that creates the complete expected matrix before collection, accounts one terminal outcome per planned key, persists every outcome, and runs repeatedly/non-interactively.
 
-Compose SG01–SG05 into one operational parser run that processes the requested matrix, records every unit outcome, persists results, and can be launched repeatedly without interactive city preparation.
+## Input
+ProductSet + CitySet + SG02 ProxyContext authority + SG03 WB outcomes + SG04 Ozon outcomes + separately available SG05 fallback + configured file/PG output.
 
-## Input Contract
+## Output
+`RunPlan` and complete `RunResultSet` keyed by `(marketplace, sku, city)`.
 
-```text
-ProductSet from SG01
-CitySet from SG01
-WB collector from SG03
-Ozon collector from SG04
-Fallback capability from SG05
-Configured output target: file and/or PostgreSQL
-```
+Required persisted common fields:
+- run_id;
+- timestamp;
+- marketplace;
+- sku/product identifier;
+- city;
+- price;
+- status/error.
 
-## Output Contract
+WB additionally: stock quantity/availability.
 
-A complete RunResult set for the planned matrix:
+## Acceptance
+Matrix planned before network execution; terminal count equals planned count; missing/duplicate/unexpected outcomes explicit; failures persist as rows; file and PostgreSQL preserve required semantics; WB stock survives; one run_id across targets; no-stdin scheduler-ready primary invocation; repeated runs have distinct identities and bounded/city-correct resources; no automatic SG05 fallback.
 
-```text
-Products × Cities × enabled Marketplaces
-```
-
-Each planned unit has either a successful business result or explicit failure status.
-
-Persisted minimum result fields:
-
-```text
-timestamp
-marketplace
-product identifier
-city
-price
-status / error
-```
-
-WB additionally persists:
-
-```text
-stock / availability
-```
-
-The primary operational entrypoint supports repeat/non-interactive execution after configuration, so an external scheduler can launch it without answering prompts or warming city profiles.
-
-## Acceptance Criteria
-
-- matrix expansion covers every requested product/city for its marketplace;
-- failure of one unit does not silently erase unrelated units;
-- every planned unit is accounted for as success or explicit error;
-- file output works where already supported;
-- PostgreSQL output works where already supported;
-- city and product identity remain attached to persisted results;
-- WB stock/availability survives persistence;
-- repeated primary runs require no manual city interaction;
-- a non-interactive/scheduler-ready primary invocation exists.
-
-## Evidence
-
-- deterministic matrix fixture with expected unit count;
-- mixed success/failure integration run;
-- file persistence verification;
-- PostgreSQL persistence verification;
-- repeated-run test;
-- non-interactive invocation test.
-
-## Failure Conditions
-
-- missing city/product combinations disappear without status;
-- one failed city aborts the entire result without accounting;
-- WB stock is collected but lost before persistence;
-- primary run requires interactive prompts every cycle;
-- scheduler launch cannot run from existing configuration/source data alone.
+## Verdict
+`SEMANTIC_COMPILE_PASS`.
 
 ---
 
-# SG -> G01 Contract Compilation Check
-
-This is a **decomposition completeness check**, not the final Prompt-level Semantic Compilation.
-
-| G01 requirement | Child output(s) that assemble it |
-|---|---|
-| Products from file/DB | SG01 |
-| Cities from file/DB | SG01 |
-| Minimal city proxy contract | SG01 + SG02 |
-| No hardcoded operational city/product values | SG01 |
-| Proxy-first primary path | SG02 |
-| WB regional price | SG03 |
-| WB stock/availability | SG03 |
-| Optional `wb_dest` | SG01 + SG03 |
-| Ozon proxy-first regional price | SG02 + SG04 |
-| No manual Ozon city warming in normal operation | SG04 + SG06 |
-| Legacy cookies/profile preserved as fallback | SG05 |
-| Explicit error vs zero/valid value | SG02 + SG03 + SG04 + SG06 |
-| Complete `Products × Cities × Marketplaces` accounting | SG06 |
-| File/DB persistent results | SG06 |
-| Repeatable scheduler-ready operation | SG06 |
-| One canonical implementation in `region-price-monitor` | global invariant across SG01–SG06 |
-
-## SG-level result
-
-**PASS — no G01 output-contract element is currently orphaned at SG level.**
-
-The proposed subgoals are also minimally separated by responsibility:
+# SG -> G01 reverse composition
 
 ```text
-SG01  inputs
-  -> SG02  regional transport
-       -> SG03  WB
-       -> SG04  Ozon
-SG05  legacy fallback preservation
-SG01 + SG03 + SG04 + SG05
-  -> SG06  complete operational run and persistence
+SG01 ProductSet/CitySet
+  -> SG02 ProxyContext
+       -> SG03 WB price+stock outcomes
+       -> SG04 new Ozon proxy-first outcomes
+SG05 current personalized-authenticated fallback remains separately reachable
+SG01+SG02+SG03+SG04 -> SG06 RunPlan/accounting/persistence/noninteractive run
+All six SG outputs -> G01
 ```
 
-This PASS means only that the six proposed subgoals can compositionally cover G01. It does **not** mean the architecture or implementation is proven. The next required step is decomposition of each SG into Processes, followed by the same parent-contract compilation check.
+G01 acceptance mapping:
+- A01 autonomy -> SG01+SG02+SG03+SG04+SG05 separation+SG06;
+- A02 products file/DB -> SG01;
+- A03 cities file/DB -> SG01;
+- A04 minimal city/proxy contract -> SG01+SG02;
+- A05 WB price -> SG03;
+- A06 WB stock -> SG03, persisted by SG06;
+- A07 Ozon price -> SG04;
+- A08 optional wb_dest -> SG01+SG03;
+- A09 legacy fallback -> SG05 C02;
+- A10 failure isolation -> SG02+SG03+SG04+SG06;
+- A11 repeated no-manual-region operation -> SG04+SG05 separation+SG06;
+- A12 complete matrix -> SG06.
+
+No G01 output or automatic-fail condition is orphaned.
+
+## Current global verdict
+
+**`SEMANTIC_COMPILE_PASS (WHOLE G01 PROPOSED GENERATION)`**.
+
+Execution may now begin in dependency order. Runtime evidence gates remain authoritative and can force structural repair/recompilation before implementation acceptance.
