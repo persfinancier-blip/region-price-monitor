@@ -20,5 +20,9 @@ Materialized hierarchy:
 
 Prompts are bound one-to-one under `prompts/work/G01-SG06/`.
 
-Planning verdict: `SEMANTIC_COMPILE_PASS (vertical only)`.
-Implementation remains blocked until separate whole-G01 reverse semantic compilation passes.
+SG06 planning verdict: `SEMANTIC_COMPILE_PASS (vertical only)`.
+
+Whole-G01 report: `docs/development/G01/full-compile-report.md`.
+Current global verdict: **`SEMANTIC_COMPILE_PASS (WHOLE G01 PROPOSED GENERATION)`**.
+
+Implementation execution is now permitted in the dependency/serialization order defined by the whole-G01 report; runtime gates remain authoritative.
