@@ -95,6 +95,40 @@ def ensure_checkout(repo: Path, remote: str, branch: str) -> bool:
     return True
 
 
+def recover_stale_index_lock(repo: Path) -> bool:
+    """Удалить только stale .git/index.lock; активный Git никогда не прерывается."""
+    lock = repo / ".git" / "index.lock"
+    if not lock.exists():
+        return False
+
+    if os.name != "nt":
+        raise DeliveryError(
+            "LOCAL_GIT_INDEX_LOCK",
+            "Обнаружен .git/index.lock. Автоматическое удаление разрешено только Windows launcher после проверки процессов.",
+        )
+
+    tasklist = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq git.exe", "/NH"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if "git.exe" in tasklist.stdout.lower():
+        raise DeliveryError(
+            "LOCAL_GIT_INDEX_LOCK_ACTIVE",
+            "Обнаружен .git/index.lock и активный git.exe. Закройте Git-операции и повторите запуск; lock не удалён.",
+        )
+
+    try:
+        lock.unlink()
+    except OSError as exc:
+        raise DeliveryError(
+            "LOCAL_GIT_INDEX_LOCK_CLEANUP_FAILED",
+            f"Stale .git/index.lock не удалось удалить: {exc}",
+        ) from exc
+    return True
+
+
 def validate_checkout(repo: Path, remote: str) -> None:
     if not (repo / ".git").is_dir():
         raise DeliveryError("LOCAL_CHECKOUT_INVALID", "В локальной папке отсутствует .git.")
@@ -163,6 +197,7 @@ def ensure_target_branch(repo: Path, branch: str, remote_ref: str) -> bool:
 
 def sync_checkout(repo: Path, remote: str, branch: str) -> bool:
     """Безопасно перейти на configured branch и fast-forward обновить до origin/branch."""
+    recover_stale_index_lock(repo)
     validate_checkout(repo, remote)
     assert_clean_tracked(repo)
     remote_ref = _fetch_target_branch(repo, branch)
