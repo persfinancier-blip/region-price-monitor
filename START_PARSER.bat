@@ -4,6 +4,7 @@ title Region Price Monitor - sync and start
 
 rem Repository settings
 set "REPO_URL=https://github.com/persfinancier-blip/region-price-monitor.git"
+set "REPO_URL_ALT=https://github.com/persfinancier-blip/region-price-monitor"
 if defined RPM_IMPLEMENTATION_BRANCH (
   set "BRANCH=%RPM_IMPLEMENTATION_BRANCH%"
 ) else (
@@ -36,8 +37,41 @@ if not exist "%REPO_DIR%\.git" (
   if errorlevel 1 goto :clone_failed
 )
 
-if not exist "%REPO_DIR%\tools\local_delivery.py" goto :helper_missing
+rem A checkout created by an older launcher may not contain the helper yet.
+rem Bootstrap it using the same fail-closed rules, then hand over to Python.
+if not exist "%REPO_DIR%\tools\local_delivery.py" goto :bootstrap_helper
+goto :run_helper
 
+:bootstrap_helper
+echo [INFO] Local checkout is older than the sync helper. Bootstrapping safely...
+set "ACTUAL_REMOTE="
+for /f "usebackq delims=" %%R in (`git -C "%REPO_DIR%" remote get-url origin 2^>nul`) do set "ACTUAL_REMOTE=%%R"
+if not defined ACTUAL_REMOTE goto :wrong_remote
+if /I "%ACTUAL_REMOTE%"=="%REPO_URL%" goto :bootstrap_branch
+if /I "%ACTUAL_REMOTE%"=="%REPO_URL_ALT%" goto :bootstrap_branch
+goto :wrong_remote
+
+:bootstrap_branch
+set "ACTUAL_BRANCH="
+for /f "usebackq delims=" %%B in (`git -C "%REPO_DIR%" symbolic-ref --quiet --short HEAD 2^>nul`) do set "ACTUAL_BRANCH=%%B"
+if /I not "%ACTUAL_BRANCH%"=="%BRANCH%" goto :wrong_branch
+
+set "DIRTY_TRACKED="
+for /f "usebackq delims=" %%S in (`git -C "%REPO_DIR%" status --porcelain=v1 --untracked-files=no 2^>nul`) do set "DIRTY_TRACKED=1"
+if defined DIRTY_TRACKED goto :dirty_checkout
+
+git -C "%REPO_DIR%" fetch --prune origin "%BRANCH%"
+if errorlevel 1 goto :fetch_failed
+
+git -C "%REPO_DIR%" merge-base --is-ancestor HEAD "origin/%BRANCH%" >nul 2>nul
+if errorlevel 1 goto :diverged_checkout
+
+git -C "%REPO_DIR%" merge --ff-only "origin/%BRANCH%"
+if errorlevel 1 goto :fast_forward_failed
+
+if not exist "%REPO_DIR%\tools\local_delivery.py" goto :helper_missing_after_update
+
+:run_helper
 set "PYTHONUTF8=1"
 echo [INFO] Checking local checkout and downloading updates...
 %PY_CMD% "%REPO_DIR%\tools\local_delivery.py" --repo "%REPO_DIR%" --remote "%REPO_URL%" --branch "%BRANCH%" --launch
@@ -66,16 +100,54 @@ echo %REPO_DIR%
 echo Nothing was deleted.
 goto :fail
 
+:wrong_remote
+echo.
+echo [ERROR] LOCAL_CHECKOUT_WRONG_REMOTE
+echo Existing checkout points to an unexpected Git origin.
+echo Nothing was changed.
+goto :fail
+
+:wrong_branch
+echo.
+echo [ERROR] LOCAL_CHECKOUT_WRONG_BRANCH
+echo Existing checkout is not on branch %BRANCH%.
+echo Nothing was changed.
+goto :fail
+
+:dirty_checkout
+echo.
+echo [ERROR] LOCAL_CHECKOUT_DIRTY
+echo Existing checkout has tracked local edits. Nothing was overwritten.
+goto :fail
+
+:diverged_checkout
+echo.
+echo [ERROR] LOCAL_CHECKOUT_DIVERGED
+echo Existing checkout has local commits or diverged history. No reset was attempted.
+goto :fail
+
 :clone_failed
 echo.
 echo [ERROR] GIT_CLONE_FAILED
 echo Check internet access and Git authentication.
 goto :fail
 
-:helper_missing
+:fetch_failed
+echo.
+echo [ERROR] GIT_FETCH_FAILED
+echo Check internet access and Git authentication. Local files were not changed.
+goto :fail
+
+:fast_forward_failed
+echo.
+echo [ERROR] LOCAL_FAST_FORWARD_FAILED
+echo Safe fast-forward failed. No reset or clean was attempted.
+goto :fail
+
+:helper_missing_after_update
 echo.
 echo [ERROR] LOCAL_DELIVERY_HELPER_MISSING
-echo File tools\local_delivery.py is missing in the checkout.
+echo Safe update completed but tools\local_delivery.py is still missing.
 goto :fail
 
 :runtime_failed
