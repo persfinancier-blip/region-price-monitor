@@ -1,11 +1,17 @@
-# SG04 runtime evidence note
+# SG04 runtime evidence note — C02
 
-Ozon consumer regional/session behavior is treated as runtime evidence, not a stable assumed API contract.
+Ozon consumer regional/session behavior is runtime evidence, not a stable assumed API contract.
 
-The primary path may use automatically issued cookies/session state, but must not depend on manually warmed per-city profile files.
+Primary may use automatically issued cookies/session state and may use **hidden/headless Selenium/Chrome** when evidence shows a real browser is needed. What primary may not require is **human browser work** or a manually maintained per-city profile.
 
-Two separate facts must be proven at point of use:
-1. what a fresh proxy-bound Ozon session currently needs to retrieve the requested product page/price;
-2. what observable signal is sufficient to accept the effective Ozon context as the requested city.
+Three facts must be proven at point of use:
+1. which autonomous engine strategy currently works for Ozon: `curl_cffi`, hidden Selenium/Chrome, or a bounded combination;
+2. if hidden browser is used, that its network traffic/authentication is derived from the same requested-city SG02 ProxyContext and never silently goes direct;
+3. what observable signal is sufficient to accept effective Ozon context as the requested city.
 
-If #2 cannot be proven from the current minimum CityRecord, return `OZON_REGION_CONTEXT_UNPROVEN` and repair the canonical contract rather than accepting proxy geolocation as implicit proof.
+Engine order must be evidence-driven. The contract does not assume `curl_cffi` must run before browser, nor that browser must always run.
+
+If #2 cannot be proven, return `OZON_BROWSER_PROXY_BINDING_UNPROVEN`.
+If #3 cannot be proven from the minimum CityRecord, return `OZON_REGION_CONTEXT_UNPROVEN` and repair the canonical contract rather than accepting proxy geolocation as implicit proof.
+
+A captcha/challenge that requires a human is **not** autonomous success. Primary returns an explicit failure; SG05 visible/manual fallback remains separately and intentionally invokable.
