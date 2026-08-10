@@ -14,15 +14,18 @@ Materialized hierarchy:
   - `G01.SG06.PR03.ST01.T01` — Issue #97 — Compose collectors with per-unit failure isolation
   - `G01.SG06.PR03.ST02.T01` — Issue #98 — Provide non-interactive scheduler-ready primary invocation
   - `G01.SG06.PR03.ST03.T01` — Issue #99 — Prove repeated-run lifecycle and resource isolation
+  - `G01.SG06.PR03.ST04.T01` — Issue #102 — Add double-click local Git bootstrap/sync launcher
 - `G01.SG06.PR04` — Issue #91 — End-to-end SG06 acceptance and reverse assembly
   - `G01.SG06.PR04.ST01.T01` — Issue #100 — Prove complete mixed-outcome matrix and persistence parity
   - `G01.SG06.PR04.ST02.T01` — Issue #101 — Prove SG06 acceptance and reverse assembly
 
 Prompts are bound one-to-one under `prompts/work/G01-SG06/`.
+Task #102 Prompt: `prompts/work/G01-SG06/PR03-ST04-T01-C01-I01.md`.
 
-SG06 planning verdict: `SEMANTIC_COMPILE_PASS (vertical only)`.
+SG06 planning verdict: `SEMANTIC_COMPILE_PASS (vertical only)` plus `SEMANTIC_COMPILE_PASS (SG06 local-delivery extension)`.
 
-Whole-G01 report: `docs/development/G01/full-compile-report.md`.
-Current global verdict: **`SEMANTIC_COMPILE_PASS (WHOLE G01 PROPOSED GENERATION)`**.
+Base whole-G01 report: `docs/development/G01/full-compile-report.md`.
+Normative active-generation addendum: `docs/development/G01/full-compile-addendum-local-delivery.md`.
+Current global verdict: **`SEMANTIC_COMPILE_PASS (WHOLE G01 ACTIVE 44-PROMPT GENERATION)`**.
 
-Implementation execution is now permitted in the dependency/serialization order defined by the whole-G01 report; runtime gates remain authoritative.
+Implementation execution is permitted in dependency/serialization order; #102 executes after #98 and must serialize with launcher/installer file changes. Runtime gates remain authoritative.
