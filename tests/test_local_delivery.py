@@ -136,13 +136,18 @@ class LocalDeliveryGitTests(unittest.TestCase):
         local_products.write_text('{"wb": ["2"], "ozon": []}\n', encoding="utf-8")
         self.assertEqual(tracked.read_text(), '{"wb": ["1"], "ozon": []}\n')
 
-    def test_windows_entrypoint_is_ascii_only(self) -> None:
+    def test_windows_entrypoint_is_ascii_only_and_bootstraps_stale_checkout(self) -> None:
         data = (ROOT / "START_PARSER.bat").read_bytes()
         self.assertTrue(data)
         self.assertTrue(all(byte < 128 for byte in data))
         self.assertNotIn(b"chcp 65001", data.lower())
         self.assertIn(b"work/g01-implementation", data)
         self.assertIn(b"%~dp0region-price-monitor", data)
+        self.assertIn(b":bootstrap_helper", data)
+        self.assertIn(b"fetch --prune origin", data)
+        self.assertIn(b"merge --ff-only", data)
+        self.assertIn(b"LOCAL_CHECKOUT_DIRTY", data)
+        self.assertIn(b"LOCAL_CHECKOUT_DIVERGED", data)
 
 
 if __name__ == "__main__":
