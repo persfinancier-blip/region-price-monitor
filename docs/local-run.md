@@ -4,22 +4,25 @@ User-facing entrypoint: `START_PARSER.bat`.
 
 ## What it does
 
-- stores the Git checkout under `%LOCALAPPDATA%\RegionPriceMonitor\repo` by default;
+- keeps the Git checkout next to the BAT file by default;
+- example: `C:\DEV\START_PARSER.bat` -> `C:\DEV\region-price-monitor`;
 - first launch clones `persfinancier-blip/region-price-monitor` branch `work/g01-implementation`;
 - later launches verify the expected origin/branch, fetch updates, and apply **fast-forward only**;
 - tracked local edits are never overwritten automatically;
 - ignored local state survives updates: `.env`, `parser/core/config.json`, `parser/core/local/`, profiles/cookies, debug, results and venv;
 - `parser/core/local/products.json` is used through `RPM_PRODUCTS` so ordinary interactive SKU selection does not dirty the tracked `parser/core/products.json`;
 - installer is called only when local runtime is missing or `install.bat` / `requirements.txt` changed;
-- after successful sync/setup, `parser/run_parser.bat` is launched.
+- after successful sync/setup, `parser/run_parser.bat` is launched;
+- `START_PARSER.bat` is intentionally ASCII-only to avoid Windows CMD encoding failures.
 
 ## First use
 
-1. Put `START_PARSER.bat` on the Windows Desktop (or any convenient folder).
+1. Put `START_PARSER.bat` into a convenient folder, for example `C:\DEV`.
 2. Double-click it.
-3. If Windows asks about Git/Python availability, install the missing prerequisite and run it again.
-4. The first run downloads the checkout and may spend time installing Python dependencies.
-5. The parser menu opens after setup.
+3. The first run creates `C:\DEV\region-price-monitor` when the BAT is in `C:\DEV`.
+4. If Windows reports missing Git/Python, install the missing prerequisite and run it again.
+5. The first run downloads the checkout and may spend time installing Python dependencies.
+6. The parser menu opens after setup.
 
 No manual `git clone`, `git pull`, archive copying, Docker or GitHub Actions are required.
 
