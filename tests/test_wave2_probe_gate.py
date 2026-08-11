@@ -21,10 +21,10 @@ SPEC.loader.exec_module(probe)
 
 
 class Wave2ProbeGateTests(unittest.TestCase):
-    def setUp(self):
-        self.context = ProxyContext.from_city(
+    def _context(self, city: str = "Novosibirsk") -> ProxyContext:
+        return ProxyContext.from_city(
             {
-                "city": "Novosibirsk",
+                "city": city,
                 "proxy": "https://proxy.example:443",
                 "proxy_user": "user",
                 "proxy_password": "pass",
@@ -38,7 +38,7 @@ class Wave2ProbeGateTests(unittest.TestCase):
             {
                 "query": ip,
                 "countryCode": "RU",
-                "regionName": "Novosibirsk Oblast",
+                "regionName": "Novosibirsk Oblast" if city == "Novosibirsk" else "Moscow",
                 "city": city,
                 "mobile": True,
                 "proxy": False,
@@ -56,7 +56,14 @@ class Wave2ProbeGateTests(unittest.TestCase):
             {"query", "countryCode", "regionName", "city", "mobile", "proxy", "hosting"},
         )
 
-    def test_three_stack_requested_city_confirmation_passes(self):
+    def test_ip_identity_accepts_bom_and_wrapped_json(self):
+        body = "\ufeffprovider-result:\n" + self._body("Novosibirsk") + "\nend"
+        identity = probe._ip_identity(body)
+        self.assertIsNotNone(identity)
+        self.assertEqual(identity["city"], "Novosibirsk")
+
+    def test_three_stack_egress_confirmation_passes_even_with_human_alias_label(self):
+        context = self._context("nvs")
         body = self._body("Novosibirsk")
         native = {
             "available": True,
@@ -65,16 +72,21 @@ class Wave2ProbeGateTests(unittest.TestCase):
             "stderr": None,
             "identity": probe._ip_identity(body),
         }
-        success = TransportOutcome.from_http(200, body=body, context=self.context)
+        success = TransportOutcome.from_http(200, body=body, context=context)
         with patch.object(probe, "_native_curl_proxy_check", return_value=native), patch.object(
             probe, "requests_request", return_value=success
-        ), patch.object(probe, "curl_request", return_value=success):
-            result = probe._proxy_self_check(self.context)
-        self.assertEqual(result["preliminary_gate"], "PROXY_CITY_CONTEXT_CONFIRMED_ALL_STACKS")
+        ), patch.object(probe, "curl_request", return_value=success), patch.object(
+            probe, "_save_neutral_body", return_value="local-only"
+        ):
+            result = probe._proxy_self_check(context)
+        self.assertEqual(result["preliminary_gate"], "PROXY_EGRESS_CONTEXT_CONFIRMED_ALL_STACKS")
         self.assertTrue(result["all_transport_ok"])
-        self.assertTrue(result["all_city_matches"])
+        self.assertTrue(result["all_egress_locations_agree"])
+        self.assertEqual(result["observed_egress_city"], "Novosibirsk")
+        self.assertFalse(result["city_label_matches_egress"])
 
-    def test_city_mismatch_fails_closed_even_when_all_transports_are_200(self):
+    def test_egress_mismatch_fails_closed_even_when_all_transports_are_200(self):
+        context = self._context()
         good_body = self._body("Novosibirsk")
         wrong_body = self._body("Moscow", "203.0.113.20")
         native = {
@@ -84,24 +96,29 @@ class Wave2ProbeGateTests(unittest.TestCase):
             "stderr": None,
             "identity": probe._ip_identity(good_body),
         }
-        requests_success = TransportOutcome.from_http(200, body=good_body, context=self.context)
-        curl_success = TransportOutcome.from_http(200, body=wrong_body, context=self.context)
+        requests_success = TransportOutcome.from_http(200, body=good_body, context=context)
+        curl_success = TransportOutcome.from_http(200, body=wrong_body, context=context)
         with patch.object(probe, "_native_curl_proxy_check", return_value=native), patch.object(
             probe, "requests_request", return_value=requests_success
-        ), patch.object(probe, "curl_request", return_value=curl_success):
-            result = probe._proxy_self_check(self.context)
-        self.assertEqual(result["preliminary_gate"], "PROXY_CITY_CONTEXT_MISMATCH")
+        ), patch.object(probe, "curl_request", return_value=curl_success), patch.object(
+            probe, "_save_neutral_body", return_value="local-only"
+        ):
+            result = probe._proxy_self_check(context)
+        self.assertEqual(result["preliminary_gate"], "PROXY_EGRESS_CONTEXT_MISMATCH")
         self.assertTrue(result["all_transport_ok"])
-        self.assertFalse(result["all_city_matches"])
+        self.assertFalse(result["all_egress_locations_agree"])
 
     def test_native_reference_failure_blocks_confirmation(self):
+        context = self._context()
         body = self._body("Novosibirsk")
         native = {"available": True, "ok": False, "returncode": 7, "stderr": "failed"}
-        success = TransportOutcome.from_http(200, body=body, context=self.context)
+        success = TransportOutcome.from_http(200, body=body, context=context)
         with patch.object(probe, "_native_curl_proxy_check", return_value=native), patch.object(
             probe, "requests_request", return_value=success
-        ), patch.object(probe, "curl_request", return_value=success):
-            result = probe._proxy_self_check(self.context)
+        ), patch.object(probe, "curl_request", return_value=success), patch.object(
+            probe, "_save_neutral_body", return_value="local-only"
+        ):
+            result = probe._proxy_self_check(context)
         self.assertEqual(result["preliminary_gate"], "PROVIDER_REFERENCE_CURL_FAILED")
         self.assertFalse(result["all_transport_ok"])
 
