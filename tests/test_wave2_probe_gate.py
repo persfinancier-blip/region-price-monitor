@@ -46,6 +46,9 @@ class Wave2ProbeGateTests(unittest.TestCase):
             }
         )
 
+    def test_neutral_probe_uses_documented_ipn_json_api(self):
+        self.assertEqual(probe.NEUTRAL_PROXY_CHECK_URL, "https://api.i.pn/json/")
+
     def test_ip_identity_keeps_only_safe_location_fields(self):
         identity = probe._ip_identity(self._body("Novosibirsk"))
         self.assertEqual(identity["city"], "Novosibirsk")
