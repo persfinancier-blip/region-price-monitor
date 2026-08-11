@@ -195,9 +195,6 @@ def main() -> int:
                 print(f"[FAIL] BROWSER_STARTUP_FAILED; report: {REPORT_FILE}")
                 return 3
 
-            # Prove that the visible Chrome itself is bound to the proxy before opening marketplaces.
-            # Chrome may render application/json in its own viewer, so read the raw response with a
-            # same-browser fetch rather than trusting DOM body.text.
             neutral = _navigate(driver, NEUTRAL_URL)
             neutral_fetch = _browser_fetch_text(driver, NEUTRAL_URL)
             identity = _parse_identity(neutral_fetch.get("text") or "")
