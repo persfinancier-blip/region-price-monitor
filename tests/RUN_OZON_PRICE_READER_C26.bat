@@ -12,10 +12,12 @@ set "PY=parser\core\venv\Scripts\python.exe"
 set "PYTHONPATH=%CD%\parser\core;%CD%\tools"
 
 echo ============================================================
-echo OZON ASSEMBLED PRICE READER C26
-echo SG04 proxy-first -^> PRICE/CHALLENGE.
-echo SG05 authenticated fallback only by EXPLICIT operator choice.
-echo NO CAPTCHA submission. NO automatic fallback.
+echo OZON PRICE NOW C26
+echo Goal: print the real Ozon price for the requested SKU.
+echo SG04 proxy-first is attempted first.
+echo If SG04 returns challenge/no-price, this runner EXPLICITLY
+echo authorizes the preserved SG05 authenticated legacy fallback.
+echo NO CAPTCHA submission or pointer automation.
 echo ============================================================
 echo.
 
@@ -28,8 +30,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/2] Live assembled price-reader test ...
-"%PY%" tools\probe_ozon_price_reader_c26.py
+echo [2/2] Live price run ...
+"%PY%" tools\probe_ozon_price_reader_c26.py --legacy-on-challenge
 set "RC=%ERRORLEVEL%"
 
 echo.
