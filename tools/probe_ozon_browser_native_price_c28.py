@@ -40,15 +40,30 @@ def _proxy_server(context) -> str:
     return f"{context.scheme}://{host}:{context.port}"
 
 
+def _cache_proxy(value: str) -> None:
+    value = (value or "").strip()
+    if not value:
+        return
+    LOCAL_PROXY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_PROXY_FILE.write_text(value + "\n", encoding="utf-8")
+
+
 def _load_proxy(cli_proxy: str | None) -> str:
     if cli_proxy and cli_proxy.strip():
-        return cli_proxy.strip()
+        value = cli_proxy.strip()
+        _cache_proxy(value)
+        print(f"[INFO] Cached test proxy locally: {LOCAL_PROXY_FILE}")
+        return value
     if LOCAL_PROXY_FILE.exists():
         value = LOCAL_PROXY_FILE.read_text(encoding="utf-8").strip()
         if value:
             print(f"[INFO] Using local cached proxy: {LOCAL_PROXY_FILE}")
             return value
-    return input("Proxy (VISIBLE host:port:user:pass): ").strip()
+    value = input("Proxy (VISIBLE host:port:user:pass, saved locally once): ").strip()
+    _cache_proxy(value)
+    if value:
+        print(f"[INFO] Saved test proxy locally: {LOCAL_PROXY_FILE}")
+    return value
 
 
 def _browser_ip(page) -> str | None:
