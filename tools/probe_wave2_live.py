@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 from typing import Any
 
@@ -20,7 +22,8 @@ from transport import ProxyContext, TransportKind
 
 LOCAL_PROBES = CORE / "local" / "probes"
 LOCAL_PROBES.mkdir(parents=True, exist_ok=True)
-NEUTRAL_PROXY_CHECK_URL = "https://api.ipify.org?format=json"
+# Exact neutral target shown by the proxy provider in its generated curl command.
+NEUTRAL_PROXY_CHECK_URL = "https://i.pn"
 
 
 def _sha256_text(text: str) -> str:
@@ -70,7 +73,56 @@ def _city_snippets(text: str, city: str, limit: int = 5) -> list[str]:
     return snippets
 
 
+def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
+    """Replicate provider curl semantics without exposing credentials in argv/report."""
+    curl_bin = shutil.which("curl.exe") or shutil.which("curl")
+    if not curl_bin:
+        return {"available": False, "ok": False, "error": "CURL_NOT_FOUND"}
+
+    proxy_url = f"{context.scheme}://{context.host}:{context.port}"
+    # Use curl config over stdin so proxy credentials do not appear in the process argv.
+    config_text = (
+        f'proxy = "{proxy_url}"\n'
+        f'proxy-user = "{context.proxy_user}:{context.proxy_password}"\n'
+        "silent\n"
+        "show-error\n"
+        "location\n"
+        "max-time = 20\n"
+    )
+    try:
+        cp = subprocess.run(
+            [curl_bin, "--config", "-", NEUTRAL_PROXY_CHECK_URL],
+            input=config_text,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=25,
+        )
+    except Exception as exc:
+        return {
+            "available": True,
+            "ok": False,
+            "returncode": None,
+            "error": context.redact(f"{type(exc).__name__}: {exc}"),
+        }
+
+    stdout = cp.stdout or ""
+    stderr = context.redact(cp.stderr or "")
+    result: dict[str, Any] = {
+        "available": True,
+        "ok": cp.returncode == 0 and bool(stdout.strip()),
+        "returncode": cp.returncode,
+        "stderr": stderr[:500] if stderr else None,
+    }
+    if stdout:
+        result["body_sha256"] = _sha256_text(stdout)
+        # i.pn commonly exposes the exit IP in its response; keep only a bounded safe preview.
+        result["body_preview"] = re.sub(r"\s+", " ", stdout.strip())[:200]
+    return result
+
+
 def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
+    native_curl = _native_curl_proxy_check(context)
     requests_outcome = requests_request(
         context,
         "GET",
@@ -86,6 +138,7 @@ def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
     )
     result: dict[str, Any] = {
         "url": NEUTRAL_PROXY_CHECK_URL,
+        "native_curl": native_curl,
         "requests": requests_outcome.safe_dict(),
         "curl_cffi": curl_outcome.safe_dict(),
     }
@@ -95,10 +148,17 @@ def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
         result["curl_body_sha256"] = _sha256_text(_body_text(curl_outcome.body))
 
     kinds = {requests_outcome.kind, curl_outcome.kind}
-    if requests_outcome.ok and curl_outcome.ok:
-        result["preliminary_gate"] = "PROXY_CONNECTIVITY_CONFIRMED"
+    native_ok = bool(native_curl.get("ok"))
+    if native_ok and requests_outcome.ok and curl_outcome.ok:
+        result["preliminary_gate"] = "PROXY_CONNECTIVITY_CONFIRMED_ALL_STACKS"
+    elif native_ok and not requests_outcome.ok:
+        result["preliminary_gate"] = "REQUESTS_PROXY_PATH_MISMATCH"
+    elif native_ok and requests_outcome.ok and not curl_outcome.ok:
+        result["preliminary_gate"] = "CURL_CFFI_PROXY_PATH_MISMATCH"
     elif TransportKind.PROXY_AUTH_ERROR in kinds:
         result["preliminary_gate"] = "PROXY_AUTH_REJECTED_OR_MISMATCH"
+    elif native_curl.get("available") and not native_ok:
+        result["preliminary_gate"] = "PROVIDER_REFERENCE_CURL_FAILED"
     else:
         result["preliminary_gate"] = "PROXY_CONNECTIVITY_UNPROVEN"
     return result
