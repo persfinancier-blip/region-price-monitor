@@ -5,6 +5,7 @@ import json
 import platform
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from probe_ozon_single_run_c23 import _selected_context
 DEFAULT_SKU = "3129447770"
 HOME_URL = "https://www.ozon.ru/?__rr=1&abt_att=1"
 NEUTRAL_URL = "https://api.i.pn/json/"
+TLS_FP_URL = "https://tls.browserleaks.com/json"
+FINGERPRINT_KEYS = ("ja3_hash", "ja4", "akamai_hash")
 ENDPOINTS = (
     ("entrypoint", "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2"),
     ("composer", "https://www.ozon.ru/api/composer-api.bx/page/json/v2"),
@@ -69,7 +72,7 @@ def _browser_version(user_agent: str, family: str) -> str | None:
 
 
 def _curl_target_for_family(family: str) -> str | None:
-    # Fail-closed: never mix a Firefox browser session with a Chrome TLS target.
+    # C27 is intentionally fail-closed: no Firefox-browser -> Chrome-TLS mixing.
     return {
         "firefox": "firefox",
         "chrome": "chrome",
@@ -78,9 +81,10 @@ def _curl_target_for_family(family: str) -> str | None:
 
 
 def _copy_all_cookies(session: Any, cookies: list[dict[str, Any]]) -> int:
-    """Copy every browser cookie without flattening duplicate cookie names.
+    """Copy every browser cookie into curl_cffi's cookie jar without flattening names.
 
-    Domain/path are preserved. Cookie values remain memory-only.
+    Domain/path are preserved so duplicate names scoped to different domains/paths survive.
+    Cookie values stay memory-only.
     """
     copied = 0
     for cookie in cookies:
@@ -96,6 +100,15 @@ def _copy_all_cookies(session: Any, cookies: list[dict[str, Any]]) -> int:
         session.cookies.set(name, value, **kwargs)
         copied += 1
     return copied
+
+
+def _safe_cookie_names(cookies: list[dict[str, Any]]) -> list[str]:
+    return sorted({str(c.get("name") or "") for c in cookies if c.get("name")})
+
+
+def _fingerprint_summary(payload: dict[str, Any] | None) -> dict[str, str | None]:
+    payload = payload if isinstance(payload, dict) else {}
+    return {key: (str(payload.get(key)) if payload.get(key) else None) for key in FINGERPRINT_KEYS}
 
 
 def _browser_bootstrap(context, *, visible: bool) -> dict[str, Any]:
@@ -127,7 +140,7 @@ def _browser_bootstrap(context, *, visible: bool) -> dict[str, Any]:
     with Camoufox(**kwargs) as browser:
         page = browser.new_page()
 
-        # Browser must use the exact same bound mobile sticky session.
+        # Prove that the browser uses the exact same bound mobile sticky session.
         page.goto(NEUTRAL_URL, timeout=60000)
         neutral_text = page.text_content("body") or ""
         try:
@@ -136,7 +149,16 @@ def _browser_bootstrap(context, *, visible: bool) -> dict[str, Any]:
             neutral = {}
         browser_ip = str(neutral.get("query") or "").strip() or None
 
-        # Bootstrap Ozon. UI challenge is only recorded; it is not interacted with.
+        # Measure the browser's actual TLS/HTTP2 fingerprint on the same sticky proxy.
+        page.goto(TLS_FP_URL, timeout=60000)
+        fp_text = page.text_content("body") or ""
+        try:
+            browser_fp_payload = json.loads(fp_text)
+        except Exception:
+            browser_fp_payload = {}
+        browser_fingerprint = _fingerprint_summary(browser_fp_payload)
+
+        # Bootstrap Ozon. A UI challenge is recorded as evidence, not interacted with.
         page.goto(HOME_URL, timeout=60000)
         page.wait_for_timeout(4500)
         try:
@@ -151,7 +173,6 @@ def _browser_bootstrap(context, *, visible: bool) -> dict[str, Any]:
         if any(marker in title.lower() for marker in UI_CHALLENGE_MARKERS):
             ui_challenge = True
 
-        # Keep the full browser cookie jar, including domain/path scoped duplicates.
         cookies = list(page.context.cookies())
         user_agent = page.evaluate("() => navigator.userAgent") or ""
         family = _browser_family(user_agent)
@@ -159,8 +180,10 @@ def _browser_bootstrap(context, *, visible: bool) -> dict[str, Any]:
 
     return {
         "browser_ip": browser_ip,
+        "browser_fingerprint": browser_fingerprint,
         "cookies": cookies,
         "cookie_count": len(cookies),
+        "cookie_names": _safe_cookie_names(cookies),
         "user_agent": user_agent,
         "browser_family": family,
         "browser_version": version,
@@ -168,16 +191,15 @@ def _browser_bootstrap(context, *, visible: bool) -> dict[str, Any]:
     }
 
 
-def _curl_session(*, user_agent: str, family: str, cookies: list[dict[str, Any]]) -> tuple[Any, str]:
+def _curl_session(context, *, user_agent: str, family: str, cookies: list[dict[str, Any]]) -> tuple[Any, str]:
     target = _curl_target_for_family(family)
     if target is None:
         raise ValueError(f"unsupported browser family for coherent curl handoff: {family}")
 
     session = creq.Session(impersonate=target)
     copied = _copy_all_cookies(session, cookies)
-    expected = len([cookie for cookie in cookies if cookie.get("name")])
-    if copied != expected:
-        raise ValueError(f"cookie transfer incomplete: copied={copied} expected={expected}")
+    if copied != len([c for c in cookies if c.get("name")]):
+        raise ValueError("not all named browser cookies were copied")
     session.headers.update({
         "User-Agent": user_agent,
         "Accept-Language": "ru-RU,ru;q=0.9",
@@ -203,6 +225,22 @@ def _curl_ip(session: Any, context) -> str | None:
     except Exception:
         payload = _decode_json(response.content)
     return str((payload or {}).get("query") or "").strip() or None
+
+
+def _curl_fingerprint(session: Any, context) -> dict[str, str | None]:
+    response = _session_get(session, context, TLS_FP_URL)
+    try:
+        payload = response.json()
+    except Exception:
+        payload = _decode_json(response.content)
+    return _fingerprint_summary(payload)
+
+
+def _fingerprints_match(browser_fp: dict[str, str | None], curl_fp: dict[str, str | None]) -> tuple[bool, list[str]]:
+    compared = [key for key in FINGERPRINT_KEYS if browser_fp.get(key) and curl_fp.get(key)]
+    if not compared:
+        return False, []
+    return all(browser_fp.get(key) == curl_fp.get(key) for key in compared), compared
 
 
 def _fetch_price(session: Any, context, *, sku: str, target: str) -> dict[str, Any]:
@@ -239,11 +277,7 @@ def _fetch_price(session: Any, context, *, sku: str, target: str) -> dict[str, A
             print(f"      [{short}/{target}] HTTP {response.status_code}, {len(body)} b -> challenge")
             continue
 
-        parsed = (
-            ozon._parse_entrypoint_price(payload, str(sku))
-            if isinstance(payload, dict)
-            else {"ok": False, "error": "not_json"}
-        )
+        parsed = ozon._parse_entrypoint_price(payload, str(sku)) if isinstance(payload, dict) else {"ok": False, "error": "not_json"}
         if parsed.get("ok"):
             result = dict(parsed)
             result.pop("ok", None)
@@ -265,9 +299,7 @@ def _fetch_price(session: Any, context, *, sku: str, target: str) -> dict[str, A
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="C27: one sticky proxy + full browser cookie jar + same browser-family curl handoff"
-    )
+    parser = argparse.ArgumentParser(description="C27: one sticky proxy + full browser cookie jar + same browser-family curl handoff")
     parser.add_argument("--proxy", help="host:port:user:pass or scheme://host:port:user:pass")
     parser.add_argument("--sku", default=DEFAULT_SKU)
     parser.add_argument("--visible", action="store_true")
@@ -284,7 +316,7 @@ def main() -> int:
         print(f"[ERROR] PROXY_INVALID: {type(exc).__name__}: {exc}")
         return 2
 
-    print("[1/4] Selecting fresh mobile sticky session ...")
+    print("[1/5] Selecting fresh mobile sticky session ...")
     selector = find_mobile_proxy(
         proxy_server=proxy_server,
         proxy_user=proxy_user,
@@ -298,12 +330,10 @@ def main() -> int:
         print(f"[EVIDENCE] OZON_C27_MOBILE_PROXY_BLOCKED gate={selector.get('gate')}")
         return 8
 
-    context, session_id, selected_ip = _selected_context(
-        proxy_server, proxy_user, proxy_password, selected
-    )
+    context, session_id, selected_ip = _selected_context(proxy_server, proxy_user, proxy_password, selected)
     print(f"      sticky_session={session_id} selected_ip={selected_ip}")
 
-    print("[2/4] Camoufox bootstrap on THIS exact sticky session ...")
+    print("[2/5] Camoufox bootstrap on THIS exact sticky session ...")
     try:
         browser = _browser_bootstrap(context, visible=args.visible)
     except Exception as exc:
@@ -312,7 +342,7 @@ def main() -> int:
 
     print(f"      browser_ip={browser['browser_ip']}")
     print(f"      browser={browser['browser_family']} {browser['browser_version'] or '?'}")
-    print(f"      cookies(all)={browser['cookie_count']}")
+    print(f"      cookies(all)={browser['cookie_count']} unique_names={len(browser['cookie_names'])}")
     print(f"      ui_challenge={browser['ui_challenge']}")
     if browser["browser_ip"] != selected_ip:
         print("[EVIDENCE] OZON_C27_BROWSER_STICKY_IP_MISMATCH")
@@ -324,14 +354,16 @@ def main() -> int:
         return 8
     print(f"      handshake_family: browser={browser['browser_family']} curl={target} MATCH")
 
-    print("[3/4] Creating curl_cffi session with ALL cookies + same sticky proxy ...")
+    print("[3/5] Creating curl_cffi session with ALL cookies + same sticky proxy ...")
     try:
         session, target = _curl_session(
+            context,
             user_agent=browser["user_agent"],
             family=browser["browser_family"],
             cookies=browser["cookies"],
         )
         curl_ip = _curl_ip(session, context)
+        curl_fingerprint = _curl_fingerprint(session, context)
     except Exception as exc:
         print(f"[ERROR] CURL_SESSION_FAILED: {type(exc).__name__}: {context.redact(str(exc))}")
         return 8
@@ -343,7 +375,17 @@ def main() -> int:
         print("[EVIDENCE] OZON_C27_CURL_STICKY_IP_MISMATCH")
         return 8
 
-    print("[4/4] Ozon price request with coherent session ...")
+    print("[4/5] Comparing real TLS/HTTP2 fingerprints ...")
+    fp_match, compared = _fingerprints_match(browser["browser_fingerprint"], curl_fingerprint)
+    print(f"      compared={','.join(compared) if compared else 'none'}")
+    for key in compared:
+        print(f"      {key}: browser={browser['browser_fingerprint'].get(key)} curl={curl_fingerprint.get(key)}")
+    if not fp_match:
+        print("[EVIDENCE] OZON_C27_TLS_FINGERPRINT_MISMATCH")
+        return 8
+    print("      fingerprint_match=true")
+
+    print("[5/5] Ozon price request with coherent session ...")
     result = _fetch_price(session, context, sku=str(args.sku), target=target)
     if result.get("status") == "price":
         print("\n" + "=" * 62)
@@ -352,10 +394,7 @@ def main() -> int:
             print(f"CARD:  {result['price_card']:.0f} RUB")
         if result.get("price_original"):
             print(f"ORIG:  {result['price_original']:.0f} RUB")
-        print(
-            f"path: Camoufox/{browser['browser_family']} -> "
-            f"curl_cffi/{target} -> {result['endpoint']}"
-        )
+        print(f"path: Camoufox/{browser['browser_family']} -> curl_cffi/{target} -> {result['endpoint']}")
         print(f"sticky_ip: {selected_ip}")
         print(f"cookies_transferred: {browser['cookie_count']} (values not persisted)")
         print("[EVIDENCE] OZON_SESSION_COHERENCE_PRICE_PROVEN")
