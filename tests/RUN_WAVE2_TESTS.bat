@@ -10,7 +10,7 @@ if not exist "parser\core\venv\Scripts\python.exe" (
 )
 
 set "PYTHONPATH=%CD%\parser\core"
-"parser\core\venv\Scripts\python.exe" -m unittest discover -s tests -p "test_wave2.py" -v
+"parser\core\venv\Scripts\python.exe" -m unittest discover -s tests -p "test_wave2*.py" -v
 set "RC=%ERRORLEVEL%"
 
 echo.
