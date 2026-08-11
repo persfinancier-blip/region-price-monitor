@@ -87,6 +87,31 @@ def _classify_page(title: str, body: str) -> dict[str, Any]:
     }
 
 
+def _browser_fetch_text(page: Any, url: str) -> dict[str, Any]:
+    try:
+        result = page.evaluate(
+            """async (url) => {
+                try {
+                    const response = await fetch(url, {cache: 'no-store', credentials: 'omit'});
+                    return {ok: response.ok, status: response.status, text: await response.text(), error: null};
+                } catch (error) {
+                    return {ok: false, status: null, text: '', error: String(error)};
+                }
+            }""",
+            url,
+        )
+    except Exception as exc:
+        return {"ok": False, "status": None, "text": "", "error": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(result, dict):
+        return {"ok": False, "status": None, "text": "", "error": "unexpected fetch result"}
+    return {
+        "ok": bool(result.get("ok")),
+        "status": result.get("status"),
+        "text": str(result.get("text") or ""),
+        "error": result.get("error"),
+    }
+
+
 def _run_browser_mode(p: Any, context: ProxyContext, sku: str, *, headless: bool, screenshot: Path) -> dict[str, Any]:
     result: dict[str, Any] = {
         "headless": headless,
@@ -122,9 +147,14 @@ def _run_browser_mode(p: Any, context: ProxyContext, sku: str, *, headless: bool
             page.on("request", observe)
             try:
                 neutral_response = page.goto(NEUTRAL_URL, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(800)
-                neutral_text = page.locator("body").inner_text(timeout=5000) or ""
-                result["neutral_identity"] = _safe_identity(neutral_text)
+                page.wait_for_timeout(500)
+                neutral_fetch = _browser_fetch_text(page, NEUTRAL_URL)
+                result["neutral_identity"] = _safe_identity(neutral_fetch.get("text") or "")
+                result["neutral_fetch"] = {
+                    "ok": neutral_fetch.get("ok"),
+                    "status": neutral_fetch.get("status"),
+                    "error": neutral_fetch.get("error"),
+                }
                 if neutral_response is not None:
                     result["neutral_status"] = neutral_response.status
             except Exception as exc:
