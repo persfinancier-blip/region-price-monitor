@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 from typing import Any, Iterable, Mapping
 
 SUPPORTED_MARKETPLACES = ("wb", "ozon")
+_INTEGER_FLOAT_TEXT_RE = re.compile(r"^([+-]?\d+)\.0+$")
 
 
 class InputValidationError(ValueError):
@@ -26,16 +28,23 @@ def _required_text(value: Any, field: str, *, context: str) -> str:
     return str(value).strip()
 
 
-def normalize_sku(value: Any, *, context: str = "product") -> str:
-    if _is_blank(value):
-        raise InputValidationError(f"{context}: required field 'sku' is missing or blank")
+def _identifier_text(value: Any) -> str:
+    """Normalize spreadsheet integer coercion while preserving ordinary textual identifiers."""
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
-    return str(value).strip()
+    text = str(value).strip()
+    match = _INTEGER_FLOAT_TEXT_RE.fullmatch(text)
+    return match.group(1) if match else text
+
+
+def normalize_sku(value: Any, *, context: str = "product") -> str:
+    if _is_blank(value):
+        raise InputValidationError(f"{context}: required field 'sku' is missing or blank")
+    return _identifier_text(value)
 
 
 def normalize_product_rows(rows: Iterable[Mapping[str, Any]], *, source: str = "product input") -> dict[str, list[str]]:
@@ -116,14 +125,7 @@ def normalize_city_record(raw: Mapping[str, Any] | CityRecord, *, context: str =
     proxy_user = _required_text(row.get("proxy_user"), "proxy_user", context=context)
     proxy_password = _required_text(row.get("proxy_password"), "proxy_password", context=context)
     wb_dest_raw = row.get("wb_dest")
-    if _is_blank(wb_dest_raw):
-        wb_dest = None
-    elif isinstance(wb_dest_raw, int) and not isinstance(wb_dest_raw, bool):
-        wb_dest = str(wb_dest_raw)
-    elif isinstance(wb_dest_raw, float) and wb_dest_raw.is_integer():
-        wb_dest = str(int(wb_dest_raw))
-    else:
-        wb_dest = str(wb_dest_raw).strip()
+    wb_dest = None if _is_blank(wb_dest_raw) else _identifier_text(wb_dest_raw)
     return CityRecord(
         city=city,
         proxy=proxy,
