@@ -31,14 +31,18 @@ class OzonDirectVsProxyC36Tests(unittest.TestCase):
         self.assertIn('"egress_ip"', SOURCE)
 
     def test_no_browser_fingerprint_mutation(self):
-        forbidden = (
+        # Check actual code structure instead of matching diagnostic print text such as
+        # "user_agent=...".  No browser/context call may receive a user_agent kwarg.
+        for node in ast.walk(TREE):
+            if isinstance(node, ast.Call):
+                keyword_names = {kw.arg for kw in node.keywords if kw.arg is not None}
+                self.assertNotIn("user_agent", keyword_names)
+        for forbidden in (
             "add_init_script",
             "navigator.webdriver",
-            "user_agent=",
             "firefox_user_prefs",
-        )
-        for marker in forbidden:
-            self.assertNotIn(marker, LOW)
+        ):
+            self.assertNotIn(forbidden, LOW)
 
     def test_no_captcha_submission_or_pointer_automation(self):
         forbidden = (
