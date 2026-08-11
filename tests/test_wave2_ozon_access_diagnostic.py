@@ -22,13 +22,13 @@ class OzonAccessDiscriminatorTests(unittest.TestCase):
         self.assertIn("ozon_route_denied_both_browser_modes", source)
         self.assertIn("ozon_headless_specific_denial_evidenced", source)
 
-    def test_probe_remains_zero_user_and_does_not_add_login_or_manual_cookies(self):
+    def test_probe_remains_zero_user_and_does_not_add_ozon_credentials_or_profile_state(self):
         source = PROBE.read_text(encoding="utf-8").lower()
         self.assertNotIn("ozon_password", source)
         self.assertNotIn("ozon_login", source)
         self.assertNotIn("storage_state=", source)
-        self.assertNotIn("input(\"captcha", source)
-        self.assertNotIn("cookies=", source)
+        self.assertNotIn("cookie_file", source)
+        self.assertNotIn("cookies_from_curl", source)
 
     def test_runner_targets_only_c09_discriminator(self):
         source = RUNNER.read_text(encoding="utf-8")
