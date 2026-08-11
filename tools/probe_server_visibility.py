@@ -97,14 +97,23 @@ def _save_local(name: str, text: str) -> str | None:
     return str(path)
 
 
+def _is_marketplace_http_response(outcome: TransportOutcome) -> bool:
+    if outcome.status_code is None:
+        return False
+    if outcome.status_code == 407:
+        return False
+    return outcome.kind.value not in {"proxy_auth_error", "proxy_connection_error"}
+
+
 def _site_evidence(outcome: TransportOutcome, local_name: str) -> dict[str, Any]:
     text = _body_text(outcome.body)
     headers = dict(outcome.headers or {})
     title = _html_title(text)
     low = text.lower()
+    marketplace_response = _is_marketplace_http_response(outcome)
     evidence = {
         "transport": outcome.safe_dict(),
-        "response_received": outcome.status_code is not None,
+        "marketplace_http_response_received": marketplace_response,
         "body_chars": len(text),
         "body_sha256": _sha256(text),
         "content_type": headers.get("Content-Type") or headers.get("content-type"),
@@ -178,10 +187,10 @@ def main() -> int:
     wb["requested_url"] = wb_url
     ozon["requested_url"] = ozon_url
 
-    # "Reachable" means the TLS/HTTP client received an HTTP response from the requested HTTPS host.
-    # 4xx/antibot is still marketplace reachability evidence; it is not data-access success.
-    wb_reachable = bool(wb["response_received"])
-    ozon_reachable = bool(ozon["response_received"])
+    # Marketplace reachability means an HTTP response made it past the proxy layer.
+    # A 4xx/antibot response is valid reachability evidence but not data-access success.
+    wb_reachable = bool(wb["marketplace_http_response_received"])
+    ozon_reachable = bool(ozon["marketplace_http_response_received"])
     wb["visibility_gate"] = "WB_SITE_REACHABLE" if wb_reachable else "WB_SITE_UNREACHABLE"
     if ozon_reachable and ozon["antibot_marker"]:
         ozon["visibility_gate"] = "OZON_SITE_REACHABLE_ANTIBOT_RESPONSE"
