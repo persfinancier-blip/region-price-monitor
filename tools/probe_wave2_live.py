@@ -7,15 +7,21 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "parser" / "core"
-if str(CORE) not in sys.path:
-    sys.path.insert(0, str(CORE))
+TOOLS = ROOT / "tools"
+for path in (CORE, TOOLS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
+from browser_proxy_bridge import LocalBrowserProxyBridge
 from config import WB_HEADERS
 from curl_transport import request_via_proxy as curl_request
+from platform_utils import get_chrome_major_version
 from requests_transport import request_via_proxy as requests_request
 from transport import ProxyContext, ProxyContextError, TransportKind
 
@@ -29,13 +35,26 @@ NEUTRAL_PROXY_CHECK_URL = "https://api.i.pn/json/"
 # mandatory CityRecord fields or production semantic authority.
 ARCHIVED_WB_CONTROL_SKU = "629760017"
 ARCHIVED_WB_NOVOSIBIRSK_DEST = "-1075267"
+ARCHIVED_WB_NOVOSIBIRSK_COORDS = (55.0084, 82.9357)
 ARCHIVED_OZON_CONTROL_SKU = "3129447770"
 
+WB_GEO_URL = "https://user-geo-data.wildberries.ru/get-geo-info"
 WB_API_URLS = {
+    "v1": "https://card.wb.ru/cards/v1/detail",
     "v2": "https://card.wb.ru/cards/v2/detail",
     "v4": "https://card.wb.ru/cards/v4/detail",
+    "u_card_v2": "https://u-card.wb.ru/cards/v2/detail",
 }
 OZON_COMPOSER_API_URL = "https://www.ozon.ru/api/composer-api.bx/page/json/v2"
+
+_CHALLENGE_TOKENS = (
+    "captcha",
+    "antibot",
+    "checking your browser",
+    "проверка браузера",
+    "подтвердите, что вы не робот",
+    "капча",
+)
 
 
 def _sha256_text(text: str) -> str:
@@ -61,7 +80,7 @@ def _json_payload(text: str) -> dict[str, Any] | None:
     decoder = json.JSONDecoder()
     for match in re.finditer(r"\{", clean):
         try:
-            candidate, _ = decoder.raw_decode(clean[match.start():])
+            candidate, _ = decoder.raw_decode(clean[match.start() :])
         except Exception:
             continue
         if isinstance(candidate, dict):
@@ -72,8 +91,13 @@ def _json_payload(text: str) -> dict[str, Any] | None:
 def _ip_identity(text: str) -> dict[str, Any] | None:
     payload = _json_payload(text)
     if not isinstance(payload, dict):
+
         def string_field(name: str) -> str | None:
-            match = re.search(rf'["\']?{re.escape(name)}["\']?\s*[:=]\s*["\']([^"\']+)["\']', text, re.I)
+            match = re.search(
+                rf'["\']?{re.escape(name)}["\']?\s*[:=]\s*["\']([^"\']+)["\']',
+                text,
+                re.I,
+            )
             return match.group(1).strip() if match else None
 
         city = string_field("city")
@@ -108,10 +132,24 @@ def _egress_location(identity: dict[str, Any] | None) -> tuple[str, str, str] | 
     )
 
 
-def _save_neutral_body(name: str, text: str) -> str:
-    path = LOCAL_PROBES / f"neutral_{name}.txt"
+def _same_egress_identity(left: dict[str, Any] | None, right: dict[str, Any] | None) -> bool:
+    if _egress_location(left) is None or _egress_location(right) is None:
+        return False
+    if _egress_location(left) != _egress_location(right):
+        return False
+    left_ip = str((left or {}).get("query") or "")
+    right_ip = str((right or {}).get("query") or "")
+    return bool(left_ip and right_ip and left_ip == right_ip)
+
+
+def _save_local_body(name: str, text: str) -> str:
+    path = LOCAL_PROBES / name
     path.write_text(text, encoding="utf-8")
     return str(path)
+
+
+def _save_neutral_body(name: str, text: str) -> str:
+    return _save_local_body(f"neutral_{name}.txt", text)
 
 
 def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
@@ -244,13 +282,59 @@ def _wb_probe_headers(sku: str) -> dict[str, str]:
     }
 
 
-def _wb_variants(dest: str) -> list[tuple[str, str, str | None]]:
-    return [
-        ("v2_with_dest", WB_API_URLS["v2"], dest),
-        ("v2_no_dest", WB_API_URLS["v2"], None),
-        ("v4_with_dest", WB_API_URLS["v4"], dest),
-        ("v4_no_dest", WB_API_URLS["v4"], None),
-    ]
+def _extract_wb_dest(payload: dict[str, Any]) -> str | None:
+    for key in ("destWithPrefix", "dest"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        matches = re.findall(r"-?\d+", str(value))
+        if matches:
+            return matches[-1]
+    xinfo = str(payload.get("xinfo") or "")
+    match = re.search(r"(?:^|[?&])dest=([^&]+)", xinfo)
+    return match.group(1) if match else None
+
+
+def _probe_wb_geo(context: ProxyContext, sku: str) -> dict[str, Any]:
+    lat, lon = ARCHIVED_WB_NOVOSIBIRSK_COORDS
+    outcome = requests_request(
+        context,
+        "GET",
+        WB_GEO_URL,
+        params={"currency": "RUB", "latitude": lat, "longitude": lon, "locale": "ru"},
+        headers=_wb_probe_headers(sku),
+        timeout=30,
+    )
+    result: dict[str, Any] = {
+        "endpoint": WB_GEO_URL,
+        "diagnostic_coordinates": [lat, lon],
+        "coordinates_source": "archive_novosibirsk_control",
+        "transport": outcome.safe_dict(),
+    }
+    body = _body_text(outcome.body)
+    if body:
+        result["body_sha256"] = _sha256_text(body)
+        result["local_body_file"] = _save_local_body("wb_geo_novosibirsk.txt", body)
+    payload = _json_payload(body)
+    if isinstance(payload, dict):
+        result["observed_dest"] = _extract_wb_dest(payload)
+        result["safe_top_level_keys"] = sorted(str(key) for key in payload.keys())[:40]
+    else:
+        result["observed_dest"] = None
+    return result
+
+
+def _wb_variants(dest: str, observed_dest: str | None = None) -> list[tuple[str, str, str | None]]:
+    dest_values: list[tuple[str, str]] = [("input_dest", dest)]
+    if observed_dest and observed_dest != dest:
+        dest_values.append(("geo_dest", observed_dest))
+
+    variants: list[tuple[str, str, str | None]] = []
+    for endpoint_key, endpoint in WB_API_URLS.items():
+        for source, value in dest_values:
+            variants.append((f"{endpoint_key}_with_{source}", endpoint, value))
+        variants.append((f"{endpoint_key}_no_dest", endpoint, None))
+    return variants
 
 
 def _wb_payload_evidence(payload: dict[str, Any]) -> dict[str, Any]:
@@ -298,7 +382,11 @@ def _wb_payload_evidence(payload: dict[str, Any]) -> dict[str, Any]:
                 qty_samples.append({"wh": stock.get("wh"), "qty": qty})
 
     evidence["price_kopecks_sample"] = price_sample
-    evidence["stock_path"] = "$.data.products[].sizes[].stocks[].qty" if "data" in payload else "$.products[].sizes[].stocks[].qty"
+    evidence["stock_path"] = (
+        "$.data.products[].sizes[].stocks[].qty"
+        if "data" in payload
+        else "$.products[].sizes[].stocks[].qty"
+    )
     evidence["stock_entries"] = stock_entries
     evidence["stock_qty_samples"] = qty_samples
     evidence["stock_qty_sum_observed"] = qty_sum if numeric_qty_seen else None
@@ -308,7 +396,10 @@ def _wb_payload_evidence(payload: dict[str, Any]) -> dict[str, Any]:
 def _probe_wb(context: ProxyContext, skus: list[str], dest: str, dest_source: str) -> dict[str, Any]:
     probes: list[dict[str, Any]] = []
     headers = _wb_probe_headers(skus[0])
-    for label, url, effective_dest in _wb_variants(dest):
+    geo_probe = _probe_wb_geo(context, skus[0])
+    observed_dest = geo_probe.get("observed_dest")
+
+    for label, url, effective_dest in _wb_variants(dest, observed_dest):
         params: dict[str, Any] = {
             "appType": 1,
             "curr": "rub",
@@ -335,32 +426,35 @@ def _probe_wb(context: ProxyContext, skus: list[str], dest: str, dest_source: st
         }
         body = _body_text(outcome.body)
         if body:
-            path = LOCAL_PROBES / f"wb_{label}.json"
-            path.write_text(body, encoding="utf-8")
             item["body_sha256"] = _sha256_text(body)
-            item["local_body_file"] = str(path)
-        if outcome.ok:
-            try:
-                payload = json.loads(body)
-            except Exception as exc:
-                item["json_error"] = type(exc).__name__
+            item["local_body_file"] = _save_local_body(f"wb_{label}.txt", body)
+        payload = _json_payload(body)
+        if isinstance(payload, dict):
+            item["json_response"] = True
+            if outcome.ok:
+                item.update(_wb_payload_evidence(payload))
             else:
-                if isinstance(payload, dict):
-                    item.update(_wb_payload_evidence(payload))
+                item["safe_top_level_keys"] = sorted(str(key) for key in payload.keys())[:40]
+        elif body:
+            item["json_response"] = False
         probes.append(item)
 
     cells_with_products = [item["variant"] for item in probes if item.get("product_count", 0) > 0]
     cells_with_stock_path = [item["variant"] for item in probes if item.get("stock_entries", 0) > 0]
     return {
-        "comparison_contract": "archived_v2_v4_x_dest_no_dest",
+        "comparison_contract": "c03_current_endpoint_and_dest_discovery",
         "diagnostic_dest": dest,
         "diagnostic_dest_source": dest_source,
+        "geo_probe": geo_probe,
+        "observed_geo_dest": observed_dest,
         "probes": probes,
         "cells_with_products": cells_with_products,
         "cells_with_stock_path": cells_with_stock_path,
         "preliminary_gate": (
             "WB_STOCK_PATH_EVIDENCE_CAPTURED"
             if cells_with_stock_path
+            else "WB_ENDPOINT_CONTRACT_UNPROVEN"
+            if not cells_with_products
             else "WB_STOCK_CONTRACT_UNPROVEN"
         ),
     }
@@ -417,7 +511,209 @@ def _ozon_widget_evidence(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _probe_ozon(context: ProxyContext, sku: str) -> dict[str, Any]:
+def _ozon_city_markers(expected_identity: dict[str, Any] | None) -> list[str]:
+    markers: list[str] = []
+    if isinstance(expected_identity, dict):
+        for value in (expected_identity.get("city"), expected_identity.get("regionName")):
+            if value and str(value) not in markers:
+                markers.append(str(value))
+    if any(value.casefold() == "novosibirsk" for value in markers):
+        markers.append("Новосибирск")
+    return markers
+
+
+def _challenge_detected(text: str) -> bool:
+    low = text.casefold()
+    return any(token.casefold() in low for token in _CHALLENGE_TOKENS)
+
+
+def _probe_ozon_browser(
+    context: ProxyContext,
+    sku: str,
+    expected_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "engine": "headless_chrome_fresh_profile",
+        "profile_source": "fresh_temporary",
+        "legacy_cookies_supplied": False,
+        "human_interaction_allowed": False,
+        "browser_projection": context.browser_projection().safe_identity,
+    }
+    profile_dir = Path(tempfile.mkdtemp(prefix="wave2_ozon_browser_", dir=str(LOCAL_PROBES)))
+    driver: Any = None
+    try:
+        with LocalBrowserProxyBridge(context) as bridge:
+            result["proxy_bridge"] = bridge.safe_state
+            try:
+                import undetected_chromedriver as uc
+
+                options = uc.ChromeOptions()
+                options.add_argument("--headless=new")
+                options.add_argument(f"--user-data-dir={profile_dir}")
+                options.add_argument(f"--proxy-server={bridge.proxy_url}")
+                options.add_argument("--disable-quic")
+                options.add_argument("--disable-blink-features=AutomationControlled")
+                options.add_argument("--disable-background-networking")
+                options.add_argument("--disable-component-update")
+                options.add_argument("--disable-sync")
+                options.add_argument("--metrics-recording-only")
+                options.add_argument("--no-first-run")
+                options.add_argument("--no-default-browser-check")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                version = get_chrome_major_version()
+                driver = uc.Chrome(options=options, version_main=version) if version else uc.Chrome(options=options)
+                driver.set_page_load_timeout(35)
+                driver.set_script_timeout(30)
+            except Exception as exc:
+                result["startup_error"] = context.redact(f"{type(exc).__name__}: {exc}")
+                result["proxy_bridge"] = bridge.safe_state
+                result["preliminary_gate"] = "OZON_BROWSER_STARTUP_FAILED"
+                return result
+
+            try:
+                driver.get(NEUTRAL_PROXY_CHECK_URL)
+                neutral_text = driver.find_element("tag name", "body").text
+            except Exception as exc:
+                result["neutral_navigation_error"] = context.redact(f"{type(exc).__name__}: {exc}")
+                result["proxy_bridge"] = bridge.safe_state
+                result["preliminary_gate"] = "OZON_BROWSER_PROXY_BINDING_UNPROVEN"
+                return result
+
+            browser_identity = _ip_identity(neutral_text)
+            result["browser_identity"] = browser_identity
+            result["browser_identity_matches_transport"] = _same_egress_identity(
+                browser_identity, expected_identity
+            )
+            result["neutral_body_sha256"] = _sha256_text(neutral_text)
+            result["neutral_local_body_file"] = _save_local_body(
+                "ozon_browser_neutral.txt", neutral_text
+            )
+            result["proxy_bridge"] = bridge.safe_state
+            if not result["browser_identity_matches_transport"]:
+                result["preliminary_gate"] = "OZON_BROWSER_PROXY_BINDING_UNPROVEN"
+                return result
+
+            product_url = f"https://www.ozon.ru/product/{sku}/"
+            result["product_url"] = product_url
+            navigation_error = None
+            try:
+                driver.get(product_url)
+            except Exception as exc:
+                navigation_error = context.redact(f"{type(exc).__name__}: {exc}")
+            time.sleep(3)
+
+            try:
+                page_source = driver.page_source or ""
+            except Exception:
+                page_source = ""
+            try:
+                body_text = driver.find_element("tag name", "body").text or ""
+            except Exception:
+                body_text = ""
+            try:
+                title = driver.title or ""
+            except Exception:
+                title = ""
+            combined = "\n".join((title, body_text, page_source))
+            result["product_navigation_error"] = navigation_error
+            result["product_title"] = title[:300]
+            result["challenge_detected"] = _challenge_detected(combined)
+            result["product_body_sha256"] = _sha256_text(page_source)
+            if page_source:
+                result["product_local_body_file"] = _save_local_body(
+                    f"ozon_browser_product_{sku}.html", page_source
+                )
+            try:
+                result["browser_cookie_names"] = sorted(
+                    {str(cookie.get("name")) for cookie in driver.get_cookies() if cookie.get("name")}
+                )
+            except Exception:
+                result["browser_cookie_names"] = []
+
+            markers = _ozon_city_markers(expected_identity)
+            marker_hits = [marker for marker in markers if marker.casefold() in combined.casefold()]
+            result["city_marker_candidates"] = markers
+            result["ozon_content_city_marker_hits"] = marker_hits
+
+            composer_url = f"{OZON_COMPOSER_API_URL}?url=/product/{sku}/"
+            result["composer_url"] = composer_url
+            fetch_result: Any = None
+            try:
+                fetch_result = driver.execute_async_script(
+                    """
+                    const url = arguments[0];
+                    const done = arguments[arguments.length - 1];
+                    fetch(url, {
+                      credentials: 'include',
+                      headers: {'accept': 'application/json', 'x-o3-app-name': 'dweb_client'}
+                    }).then(async (r) => {
+                      done({ok: true, status: r.status,
+                            contentType: r.headers.get('content-type'),
+                            text: await r.text()});
+                    }).catch((e) => done({ok: false, error: String(e)}));
+                    """,
+                    composer_url,
+                )
+            except Exception as exc:
+                result["composer_fetch_error"] = context.redact(f"{type(exc).__name__}: {exc}")
+
+            composer_text = ""
+            composer_status = None
+            if isinstance(fetch_result, dict):
+                result["composer_fetch_ok"] = bool(fetch_result.get("ok"))
+                composer_status = fetch_result.get("status")
+                result["composer_status_code"] = composer_status
+                result["composer_content_type"] = fetch_result.get("contentType")
+                if fetch_result.get("error"):
+                    result["composer_fetch_error"] = context.redact(fetch_result.get("error"))
+                composer_text = str(fetch_result.get("text") or "")
+            else:
+                result["composer_fetch_ok"] = False
+
+            if composer_text:
+                result["composer_body_sha256"] = _sha256_text(composer_text)
+                result["composer_local_body_file"] = _save_local_body(
+                    f"ozon_browser_composer_{sku}.txt", composer_text
+                )
+            payload = _json_payload(composer_text)
+            if isinstance(payload, dict):
+                result["composer_json_response"] = True
+                result.update(_ozon_widget_evidence(payload))
+            elif composer_text:
+                result["composer_json_response"] = False
+
+            price_evidence = bool(result.get("price_widgets"))
+            if result["challenge_detected"]:
+                result["preliminary_gate"] = "OZON_BROWSER_HUMAN_ACTION_REQUIRED_CHALLENGE"
+            elif composer_status == 200 and price_evidence and marker_hits:
+                result["preliminary_gate"] = "OZON_BROWSER_BOOTSTRAP_EVIDENCE_CAPTURED_CITY_MARKER"
+            elif composer_status == 200 and price_evidence:
+                result["preliminary_gate"] = (
+                    "OZON_BROWSER_BOOTSTRAP_HTTP_EVIDENCE_CITY_VERIFICATION_REQUIRED"
+                )
+            elif composer_status in (403, 429):
+                result["preliminary_gate"] = "OZON_BROWSER_SESSION_BLOCKED"
+            elif navigation_error:
+                result["preliminary_gate"] = "OZON_BROWSER_NAVIGATION_FAILED"
+            else:
+                result["preliminary_gate"] = "OZON_CONTEXT_CONTRACT_UNPROVEN"
+            result["proxy_bridge"] = bridge.safe_state
+            return result
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+def _probe_ozon(
+    context: ProxyContext,
+    sku: str,
+    expected_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
     from curl_cffi import requests as creq
 
     headers = _ozon_probe_headers(sku)
@@ -443,37 +739,50 @@ def _probe_ozon(context: ProxyContext, sku: str) -> dict[str, Any]:
 
     body = _body_text(outcome.body)
     if body:
-        path = LOCAL_PROBES / f"ozon_composer_{sku}.txt"
-        path.write_text(body, encoding="utf-8")
         result["body_sha256"] = _sha256_text(body)
-        result["local_body_file"] = str(path)
+        result["local_body_file"] = _save_local_body(f"ozon_composer_{sku}.txt", body)
 
+    needs_browser = False
     if outcome.status_code == 403:
-        result["preliminary_gate"] = "OZON_COMPOSER_NO_COOKIE_BLOCKED_BROWSER_BOOTSTRAP_REQUIRED"
+        result["http_preliminary_gate"] = (
+            "OZON_COMPOSER_NO_COOKIE_BLOCKED_BROWSER_BOOTSTRAP_REQUIRED"
+        )
+        needs_browser = True
+    elif not outcome.ok:
+        result["http_preliminary_gate"] = "OZON_CONTEXT_CONTRACT_UNPROVEN"
         return result
-    if not outcome.ok:
-        result["preliminary_gate"] = "OZON_CONTEXT_CONTRACT_UNPROVEN"
-        return result
-
-    payload = _json_payload(body)
-    if not isinstance(payload, dict):
-        result["json_response"] = False
-        result["preliminary_gate"] = "OZON_COMPOSER_NON_JSON_BROWSER_BOOTSTRAP_REQUIRED"
-        return result
-
-    result["json_response"] = True
-    result.update(_ozon_widget_evidence(payload))
-    if result["price_widgets"]:
-        result["preliminary_gate"] = "OZON_COMPOSER_HTTP_EVIDENCE_CAPTURED_CITY_VERIFICATION_REQUIRED"
     else:
-        result["preliminary_gate"] = "OZON_COMPOSER_JSON_NO_PRICE_WIDGET"
+        payload = _json_payload(body)
+        if not isinstance(payload, dict):
+            result["json_response"] = False
+            result["http_preliminary_gate"] = (
+                "OZON_COMPOSER_NON_JSON_BROWSER_BOOTSTRAP_REQUIRED"
+            )
+            needs_browser = True
+        else:
+            result["json_response"] = True
+            result.update(_ozon_widget_evidence(payload))
+            if result["price_widgets"]:
+                result["preliminary_gate"] = (
+                    "OZON_COMPOSER_HTTP_EVIDENCE_CAPTURED_CITY_VERIFICATION_REQUIRED"
+                )
+            else:
+                result["preliminary_gate"] = "OZON_COMPOSER_JSON_NO_PRICE_WIDGET"
+            return result
+
+    if needs_browser:
+        browser = _probe_ozon_browser(context, sku, expected_identity)
+        result["browser_bootstrap"] = browser
+        result["preliminary_gate"] = browser.get(
+            "preliminary_gate", "OZON_CONTEXT_CONTRACT_UNPROVEN"
+        )
     return result
 
 
 def main() -> int:
     print("=== G01 Wave 2 live evidence probe ===")
     print("Credentials are used only in memory and are not written to the report.")
-    print("This run replays archived proven WB/Ozon request shapes after proxy egress confirmation.")
+    print("This run extends WB endpoint/dest evidence and, when needed, performs a zero-human headless Ozon bootstrap probe.")
     city = input("City label: ").strip()
     proxy = input("Proxy address (REQUIRED scheme://host:port): ").strip()
     proxy_user = input("Proxy username: ").strip()
@@ -511,7 +820,9 @@ def main() -> int:
         "wb": None,
         "ozon": None,
     }
-    proxy_gate_ok = proxy_checks.get("preliminary_gate") == "PROXY_EGRESS_CONTEXT_CONFIRMED_ALL_STACKS"
+    proxy_gate_ok = (
+        proxy_checks.get("preliminary_gate") == "PROXY_EGRESS_CONTEXT_CONFIRMED_ALL_STACKS"
+    )
 
     wb_enabled = wb_skus_raw != "-"
     if wb_enabled:
@@ -531,7 +842,8 @@ def main() -> int:
     if ozon_enabled:
         ozon_sku = ozon_sku_raw or ARCHIVED_OZON_CONTROL_SKU
         if proxy_gate_ok:
-            report["ozon"] = _probe_ozon(context, ozon_sku)
+            expected_identity = (proxy_checks.get("native_curl") or {}).get("identity")
+            report["ozon"] = _probe_ozon(context, ozon_sku, expected_identity)
         else:
             report["ozon"] = {
                 "blocked_by_proxy_check": True,
@@ -540,7 +852,9 @@ def main() -> int:
             }
 
     report_file = LOCAL_PROBES / "wave2_probe_report.json"
-    report_file.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    report_file.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     print("\n=== SAFE REPORT ===")
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     print(f"\n[INFO] Safe report saved to: {report_file}")
