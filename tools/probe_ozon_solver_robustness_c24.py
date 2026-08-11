@@ -291,10 +291,23 @@ def _run_once(index: int, *, proxy_server: str, proxy_user: str, proxy_password:
     post_ip, post_transport, post_error = _neutral_identity(context)
     continuity_ok = not post_error and post_ip == selected_ip
 
+    if solved.ok and continuity_ok:
+        outcome_name = "solved"
+        run_gate = "SOLVED"
+    elif solved.ok:
+        outcome_name = "solved_continuity_lost"
+        run_gate = "POST_SOLVE_STICKY_IP_MISMATCH"
+    elif continuity_ok:
+        outcome_name = "solver_uncertain"
+        run_gate = "SOLVER_UNCERTAIN"
+    else:
+        outcome_name = "solver_uncertain_continuity_lost"
+        run_gate = "POST_SOLVE_STICKY_IP_MISMATCH"
+
     return {
         "run": index,
-        "outcome": "solved" if solved.ok else "solver_uncertain",
-        "gate": "SOLVED" if solved.ok else "SOLVER_UNCERTAIN",
+        "outcome": outcome_name,
+        "gate": run_gate,
         "session_id": session_id,
         "operator": selected.get("operator"),
         "selected_ip": selected_ip,
