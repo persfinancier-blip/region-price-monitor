@@ -16,10 +16,11 @@ if str(CORE) not in sys.path:
 from config import WB_API_URL, WB_HEADERS
 from curl_transport import request_via_proxy as curl_request
 from requests_transport import request_via_proxy as requests_request
-from transport import ProxyContext
+from transport import ProxyContext, TransportKind
 
 LOCAL_PROBES = CORE / "local" / "probes"
 LOCAL_PROBES.mkdir(parents=True, exist_ok=True)
+NEUTRAL_PROXY_CHECK_URL = "https://api.ipify.org?format=json"
 
 
 def _sha256_text(text: str) -> str:
@@ -67,6 +68,40 @@ def _city_snippets(text: str, city: str, limit: int = 5) -> list[str]:
         snippets.append(snippet)
         start = pos + len(needle)
     return snippets
+
+
+def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
+    requests_outcome = requests_request(
+        context,
+        "GET",
+        NEUTRAL_PROXY_CHECK_URL,
+        timeout=20,
+    )
+    curl_outcome = curl_request(
+        context,
+        "GET",
+        NEUTRAL_PROXY_CHECK_URL,
+        impersonate="edge",
+        timeout=20,
+    )
+    result: dict[str, Any] = {
+        "url": NEUTRAL_PROXY_CHECK_URL,
+        "requests": requests_outcome.safe_dict(),
+        "curl_cffi": curl_outcome.safe_dict(),
+    }
+    if requests_outcome.ok:
+        result["requests_body_sha256"] = _sha256_text(_body_text(requests_outcome.body))
+    if curl_outcome.ok:
+        result["curl_body_sha256"] = _sha256_text(_body_text(curl_outcome.body))
+
+    kinds = {requests_outcome.kind, curl_outcome.kind}
+    if requests_outcome.ok and curl_outcome.ok:
+        result["preliminary_gate"] = "PROXY_CONNECTIVITY_CONFIRMED"
+    elif TransportKind.PROXY_AUTH_ERROR in kinds:
+        result["preliminary_gate"] = "PROXY_AUTH_REJECTED_OR_MISMATCH"
+    else:
+        result["preliminary_gate"] = "PROXY_CONNECTIVITY_UNPROVEN"
+    return result
 
 
 def _probe_wb(context: ProxyContext, skus: list[str], dest: str | None) -> dict[str, Any]:
@@ -210,15 +245,32 @@ def main() -> int:
     })
     report: dict[str, Any] = {
         "proxy_context": context.safe_identity,
+        "proxy_checks": _proxy_self_check(context),
         "wb": None,
         "ozon": None,
     }
 
+    requests_proxy_ok = report["proxy_checks"]["requests"]["ok"]
+    curl_proxy_ok = report["proxy_checks"]["curl_cffi"]["ok"]
+
     if wb_skus_raw:
-        wb_skus = [part.strip() for part in re.split(r"[,;]", wb_skus_raw) if part.strip()]
-        report["wb"] = _probe_wb(context, wb_skus, wb_dest)
+        if requests_proxy_ok:
+            wb_skus = [part.strip() for part in re.split(r"[,;]", wb_skus_raw) if part.strip()]
+            report["wb"] = _probe_wb(context, wb_skus, wb_dest)
+        else:
+            report["wb"] = {
+                "blocked_by_proxy_check": True,
+                "preliminary_gate": "WB_STOCK_CONTRACT_UNPROVEN",
+            }
     if ozon_sku:
-        report["ozon"] = _probe_ozon(context, ozon_sku)
+        if curl_proxy_ok:
+            report["ozon"] = _probe_ozon(context, ozon_sku)
+        else:
+            report["ozon"] = {
+                "blocked_by_proxy_check": True,
+                "browser_projection": context.browser_projection().safe_identity,
+                "preliminary_gate": "OZON_CONTEXT_CONTRACT_UNPROVEN",
+            }
 
     report_file = LOCAL_PROBES / "wave2_probe_report.json"
     report_file.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
