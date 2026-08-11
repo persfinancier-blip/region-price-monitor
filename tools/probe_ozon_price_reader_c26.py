@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -29,12 +30,20 @@ def _profiles() -> list[Path]:
     )
 
 
-def _choose_legacy_profile() -> Path | None:
+def _choose_legacy_profile(*, already_authorized: bool) -> Path | None:
     profiles = _profiles()
-    print("\nSG04 did not return a price.")
-    answer = input("Run EXPLICIT SG05 authenticated legacy fallback? [y/N]: ").strip().lower()
-    if answer not in {"y", "yes", "д", "да"}:
-        return None
+
+    if not already_authorized:
+        print("\nSG04 did not return a price.")
+        answer = input("Run EXPLICIT SG05 authenticated legacy fallback? [y/N]: ").strip().lower()
+        if answer not in {"y", "yes", "д", "да"}:
+            return None
+    else:
+        print("\nSG04 did not return a price; this runner was explicitly started with SG05 fallback allowed.")
+
+    if len(profiles) == 1:
+        print(f"Using the only local authenticated profile: {profiles[0]}")
+        return profiles[0]
 
     if profiles:
         print("Local profiles with cookies.json:")
@@ -52,10 +61,28 @@ def _choose_legacy_profile() -> Path | None:
     return None
 
 
+def _args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--legacy-on-challenge",
+        action="store_true",
+        help=(
+            "Explicitly authorize SG05 authenticated legacy fallback for this invocation "
+            "if SG04 returns challenge/no-price."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = _args()
     print("=== Ozon assembled price reader C26 ===")
-    print("SG04 proxy-first -> PRICE/CHALLENGE; SG05 only by explicit operator choice.")
-    print("NO CAPTCHA submission. NO automatic fallback.")
+    if args.legacy_on_challenge:
+        print("GOAL: SHOW OZON PRICE. SG05 authenticated fallback is explicitly authorized by this runner.")
+    else:
+        print("SG04 proxy-first -> PRICE/CHALLENGE; SG05 only by explicit operator choice.")
+    print("NO CAPTCHA submission.")
+
     proxy_raw = input("Proxy (VISIBLE host:port:user:pass): ").strip()
     sku = input(f"Ozon SKU [Enter = {DEFAULT_SKU}]: ").strip() or DEFAULT_SKU
 
@@ -99,7 +126,7 @@ def main() -> int:
     else:
         print(f"detail={primary.get('error') or primary.get('transport_error')}")
 
-    profile = _choose_legacy_profile()
+    profile = _choose_legacy_profile(already_authorized=args.legacy_on_challenge)
     if profile is None:
         print("[EVIDENCE] OZON_PRICE_PRIMARY_BLOCKED_FALLBACK_NOT_INVOKED")
         return 8
