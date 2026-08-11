@@ -31,6 +31,15 @@ def _read_headers(sock: socket.socket, *, limit: int = _MAX_HEADER_BYTES) -> byt
     return bytes(data)
 
 
+def _request_method(header: bytes) -> str:
+    try:
+        first = header.split(b"\r\n", 1)[0].decode("ascii", errors="strict")
+        method, _target, _version = first.split(" ", 2)
+    except Exception as exc:
+        raise BrowserProxyBridgeError("malformed browser proxy request") from exc
+    return method.upper()
+
+
 def _parse_connect_target(header: bytes) -> tuple[str, int, str]:
     try:
         first = header.split(b"\r\n", 1)[0].decode("ascii", errors="strict")
@@ -38,7 +47,7 @@ def _parse_connect_target(header: bytes) -> tuple[str, int, str]:
     except Exception as exc:
         raise BrowserProxyBridgeError("malformed browser proxy request") from exc
     if method.upper() != "CONNECT":
-        raise BrowserProxyBridgeError("browser bridge supports HTTPS CONNECT only")
+        raise BrowserProxyBridgeError("CONNECT request required")
     if target.startswith("["):
         end = target.find("]")
         if end < 0 or end + 2 > len(target) or target[end + 1] != ":":
@@ -135,6 +144,17 @@ class _BridgeHandler(socketserver.BaseRequestHandler):
         upstream: socket.socket | None = None
         try:
             browser_header = _read_headers(self.request)
+            method = _request_method(browser_header)
+            if method != "CONNECT":
+                # Chrome may emit background plain-HTTP connectivity/time probes even when
+                # the target marketplace navigation is HTTPS. They are not part of the
+                # bounded evidence path and must not poison last_error or become a second
+                # proxy-routing authority.
+                self.request.sendall(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                return
+
             _host, _port, target = _parse_connect_target(browser_header)
             upstream = _connect_upstream(context)
             upstream.sendall(_upstream_connect_request(context, target))
@@ -166,7 +186,8 @@ class LocalBrowserProxyBridge:
     Chrome receives an unauthenticated localhost HTTP proxy URL. The bridge applies
     the upstream scheme/host/port/Basic auth from the supplied ProxyContext and has
     no separate credential/config authority. It exists only for bounded browser
-    evidence/bootstrap work.
+    evidence/bootstrap work. Incidental plain-HTTP Chrome background probes are
+    answered locally and are not forwarded or treated as evidence failures.
     """
 
     def __init__(self, context: ProxyContext):
