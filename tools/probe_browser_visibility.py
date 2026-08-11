@@ -44,6 +44,37 @@ def _parse_identity(text: str) -> dict[str, Any] | None:
     }
 
 
+def _browser_fetch_text(driver: Any, url: str) -> dict[str, Any]:
+    """Fetch from inside Chrome so JSON-viewer DOM cannot hide the raw response."""
+    script = """
+const url = arguments[0];
+const done = arguments[arguments.length - 1];
+fetch(url, {cache: 'no-store', credentials: 'omit'})
+  .then(async (response) => {
+    const text = await response.text();
+    done({ok: response.ok, status: response.status, text: text, error: null});
+  })
+  .catch((error) => done({ok: false, status: null, text: '', error: String(error)}));
+"""
+    try:
+        result = driver.execute_async_script(script, url)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": None,
+            "text": "",
+            "error": f"{type(exc).__name__}: {str(exc).splitlines()[0]}",
+        }
+    if not isinstance(result, dict):
+        return {"ok": False, "status": None, "text": "", "error": "unexpected fetch result"}
+    return {
+        "ok": bool(result.get("ok")),
+        "status": result.get("status"),
+        "text": str(result.get("text") or ""),
+        "error": result.get("error"),
+    }
+
+
 def _snapshot(driver: Any, requested_url: str, navigation_error: str | None) -> dict[str, Any]:
     try:
         current_url = driver.current_url or ""
@@ -164,18 +195,22 @@ def main() -> int:
                 print(f"[FAIL] BROWSER_STARTUP_FAILED; report: {REPORT_FILE}")
                 return 3
 
-            # Prove that the visible Chrome itself is bound to the same proxy before opening marketplaces.
+            # Prove that the visible Chrome itself is bound to the proxy before opening marketplaces.
+            # Chrome may render application/json in its own viewer, so read the raw response with a
+            # same-browser fetch rather than trusting DOM body.text.
             neutral = _navigate(driver, NEUTRAL_URL)
-            try:
-                neutral_text = driver.find_element("tag name", "body").text or ""
-            except Exception:
-                neutral_text = ""
-            identity = _parse_identity(neutral_text)
+            neutral_fetch = _browser_fetch_text(driver, NEUTRAL_URL)
+            identity = _parse_identity(neutral_fetch.get("text") or "")
             report["browser"] = {
                 "started": True,
                 "visible": True,
                 "proxy_bridge": bridge.safe_state,
                 "neutral": neutral,
+                "neutral_fetch": {
+                    "ok": neutral_fetch.get("ok"),
+                    "status": neutral_fetch.get("status"),
+                    "error": neutral_fetch.get("error"),
+                },
                 "egress_identity": identity,
             }
             if not identity or not identity.get("query") or not identity.get("city"):
