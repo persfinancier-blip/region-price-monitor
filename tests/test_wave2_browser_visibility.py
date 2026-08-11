@@ -29,10 +29,10 @@ class VisibleBrowserSmokeContractTests(unittest.TestCase):
         self.assertIn('"browser_visibility_wb.png"', source)
         self.assertIn('"browser_visibility_ozon.png"', source)
 
-    def test_runner_calls_visibility_probe(self):
+    def test_live_runner_no_longer_uses_browser_smoke(self):
         source = RUNNER.read_text(encoding="utf-8")
-        self.assertIn("tools\\probe_browser_visibility.py", source)
-        self.assertNotIn("tools\\probe_wave2_live.py", source)
+        self.assertNotIn("tools\\probe_browser_visibility.py", source)
+        self.assertIn("tools\\probe_server_visibility.py", source)
 
 
 if __name__ == "__main__":
