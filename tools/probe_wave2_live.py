@@ -18,7 +18,7 @@ if str(CORE) not in sys.path:
 from config import WB_API_URL, WB_HEADERS
 from curl_transport import request_via_proxy as curl_request
 from requests_transport import request_via_proxy as requests_request
-from transport import ProxyContext, TransportKind
+from transport import ProxyContext, ProxyContextError, TransportKind
 
 LOCAL_PROBES = CORE / "local" / "probes"
 LOCAL_PROBES.mkdir(parents=True, exist_ok=True)
@@ -80,7 +80,6 @@ def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
         return {"available": False, "ok": False, "error": "CURL_NOT_FOUND"}
 
     proxy_url = f"{context.scheme}://{context.host}:{context.port}"
-    # Use curl config over stdin so proxy credentials do not appear in the process argv.
     config_text = (
         f'proxy = "{proxy_url}"\n'
         f'proxy-user = "{context.proxy_user}:{context.proxy_password}"\n'
@@ -116,19 +115,13 @@ def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
     }
     if stdout:
         result["body_sha256"] = _sha256_text(stdout)
-        # i.pn commonly exposes the exit IP in its response; keep only a bounded safe preview.
         result["body_preview"] = re.sub(r"\s+", " ", stdout.strip())[:200]
     return result
 
 
 def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
     native_curl = _native_curl_proxy_check(context)
-    requests_outcome = requests_request(
-        context,
-        "GET",
-        NEUTRAL_PROXY_CHECK_URL,
-        timeout=20,
-    )
+    requests_outcome = requests_request(context, "GET", NEUTRAL_PROXY_CHECK_URL, timeout=20)
     curl_outcome = curl_request(
         context,
         "GET",
@@ -138,6 +131,7 @@ def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
     )
     result: dict[str, Any] = {
         "url": NEUTRAL_PROXY_CHECK_URL,
+        "proxy_scheme": context.scheme,
         "native_curl": native_curl,
         "requests": requests_outcome.safe_dict(),
         "curl_cffi": curl_outcome.safe_dict(),
@@ -235,13 +229,7 @@ def _probe_ozon(context: ProxyContext, sku: str) -> dict[str, Any]:
     from curl_cffi import requests as creq
 
     session = creq.Session(impersonate="edge")
-    home = curl_request(
-        context,
-        "GET",
-        "https://www.ozon.ru/",
-        session=session,
-        timeout=20,
-    )
+    home = curl_request(context, "GET", "https://www.ozon.ru/", session=session, timeout=20)
     result: dict[str, Any] = {
         "home_transport": home.safe_dict(),
         "browser_projection": context.browser_projection().safe_identity,
@@ -277,9 +265,7 @@ def _probe_ozon(context: ProxyContext, sku: str) -> dict[str, Any]:
     except Exception:
         result["session_cookie_names"] = []
 
-    if result["challenge_detected"]:
-        result["preliminary_gate"] = "OZON_CONTEXT_CONTRACT_UNPROVEN"
-    elif not result["has_webprice_state"]:
+    if result["challenge_detected"] or not result["has_webprice_state"]:
         result["preliminary_gate"] = "OZON_CONTEXT_CONTRACT_UNPROVEN"
     else:
         result["preliminary_gate"] = "HTTP_EVIDENCE_CAPTURED_CITY_VERIFICATION_REQUIRED"
@@ -290,19 +276,29 @@ def main() -> int:
     print("=== G01 Wave 2 live evidence probe ===")
     print("Credentials are used only in memory and are not written to the report.")
     city = input("City name: ").strip()
-    proxy = input("Proxy address (host:port or scheme://host:port): ").strip()
+    proxy = input("Proxy address (REQUIRED scheme://host:port): ").strip()
     proxy_user = input("Proxy username: ").strip()
     proxy_password = getpass("Proxy password (hidden): ")
     wb_skus_raw = input("WB SKU(s), separated by comma [Enter = skip WB]: ").strip()
     wb_dest = input("WB dest [Enter = also/only no-forced-dest probe]: ").strip() or None
     ozon_sku = input("Ozon SKU [Enter = skip Ozon]: ").strip()
 
-    context = ProxyContext.from_city({
-        "city": city,
-        "proxy": proxy,
-        "proxy_user": proxy_user,
-        "proxy_password": proxy_password,
-    })
+    try:
+        context = ProxyContext.from_city(
+            {
+                "city": city,
+                "proxy": proxy,
+                "proxy_user": proxy_user,
+                "proxy_password": proxy_password,
+            },
+            require_explicit_scheme=True,
+        )
+    except ProxyContextError as exc:
+        safe_error = str(exc)
+        print(f"\n[ERROR] PROXY_SCHEME_OR_ADDRESS_INVALID: {safe_error}")
+        print("Use the protocol configured by the provider, for example https://host:443.")
+        return 2
+
     report: dict[str, Any] = {
         "proxy_context": context.safe_identity,
         "proxy_checks": _proxy_self_check(context),
