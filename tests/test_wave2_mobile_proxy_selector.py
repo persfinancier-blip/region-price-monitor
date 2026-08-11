@@ -37,7 +37,7 @@ class MobileProxySelectorTests(unittest.TestCase):
         samples = [
             ({"isp": "MTS PJSC"}, "MTS"),
             ({"org": "PJSC VimpelCom"}, "BEELINE"),
-            ({"asname": "MegaFon"}, "MEGAFON"),
+            ({"asName": "MegaFon"}, "MEGAFON"),
             ({"carrier": "T2 Mobile"}, "TELE2_T2"),
             ({"network": "Scartel Ltd"}, "YOTA"),
         ]
