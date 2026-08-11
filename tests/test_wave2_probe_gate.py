@@ -125,6 +125,75 @@ class Wave2ProbeGateTests(unittest.TestCase):
         self.assertEqual(result["preliminary_gate"], "PROVIDER_REFERENCE_CURL_FAILED")
         self.assertFalse(result["all_transport_ok"])
 
+    def test_wb_comparison_matrix_is_v2_v4_cross_dest_and_no_dest(self):
+        variants = probe._wb_variants("-1075267")
+        self.assertEqual(
+            variants,
+            [
+                ("v2_with_dest", "https://card.wb.ru/cards/v2/detail", "-1075267"),
+                ("v2_no_dest", "https://card.wb.ru/cards/v2/detail", None),
+                ("v4_with_dest", "https://card.wb.ru/cards/v4/detail", "-1075267"),
+                ("v4_no_dest", "https://card.wb.ru/cards/v4/detail", None),
+            ],
+        )
+
+    def test_wb_payload_evidence_records_exact_stock_path_without_price_inference(self):
+        payload = {
+            "data": {
+                "products": [
+                    {
+                        "id": 629760017,
+                        "sizes": [
+                            {
+                                "price": {"basic": 350000, "product": 259000, "total": 259000},
+                                "stocks": [{"wh": 507, "qty": 12}, {"wh": 1733, "qty": 0}],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        evidence = probe._wb_payload_evidence(payload)
+        self.assertEqual(evidence["product_count"], 1)
+        self.assertEqual(evidence["stock_path"], "$.data.products[].sizes[].stocks[].qty")
+        self.assertEqual(evidence["stock_entries"], 2)
+        self.assertEqual(evidence["stock_qty_sum_observed"], 12)
+        self.assertEqual(evidence["stock_qty_samples"][1]["qty"], 0)
+
+    def test_ozon_replay_contract_targets_archived_composer_shape(self):
+        self.assertEqual(
+            probe.OZON_COMPOSER_API_URL,
+            "https://www.ozon.ru/api/composer-api.bx/page/json/v2",
+        )
+        headers = probe._ozon_probe_headers("3129447770")
+        self.assertEqual(headers["x-o3-app-name"], "dweb_client")
+        self.assertEqual(headers["accept"], "application/json")
+        self.assertIn("/product/3129447770/", headers["referer"])
+
+    def test_ozon_widget_evidence_extracts_only_bounded_price_fields(self):
+        payload = {
+            "widgetStates": {
+                "webPrice-3129447770-default-1": json.dumps(
+                    {
+                        "price": "2 682 ₽",
+                        "originalPrice": "5 900 ₽",
+                        "cardPrice": "2 414 ₽",
+                        "isAvailable": True,
+                        "irrelevant": "not copied",
+                    },
+                    ensure_ascii=False,
+                ),
+                "webOutOfStock-foo": "{}",
+            }
+        }
+        evidence = probe._ozon_widget_evidence(payload)
+        self.assertEqual(evidence["widget_state_count"], 2)
+        self.assertEqual(len(evidence["price_widgets"]), 1)
+        fields = evidence["price_widgets"][0]["fields"]
+        self.assertEqual(fields["price"], "2 682 ₽")
+        self.assertNotIn("irrelevant", fields)
+        self.assertEqual(evidence["out_of_stock_widget_keys"], ["webOutOfStock-foo"])
+
 
 if __name__ == "__main__":
     unittest.main()
