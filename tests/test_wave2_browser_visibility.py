@@ -31,8 +31,6 @@ class VisibleBrowserSmokeContractTests(unittest.TestCase):
 
     def test_live_runner_no_longer_uses_browser_smoke(self):
         source = RUNNER.read_text(encoding="utf-8")
-        # Historical C06 owns only this invariant. It must not pin the live runner
-        # to any particular later evidence phase (server visibility, WB C08, etc.).
         self.assertNotIn("probe_browser_visibility.py", source)
 
 
