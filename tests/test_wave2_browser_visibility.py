@@ -16,6 +16,13 @@ class VisibleBrowserSmokeContractTests(unittest.TestCase):
         self.assertNotIn("card.wb.ru", source)
         self.assertNotIn("composer-api", source)
 
+    def test_probe_reads_neutral_identity_with_browser_fetch_not_json_viewer_dom(self):
+        source = PROBE.read_text(encoding="utf-8")
+        self.assertIn("def _browser_fetch_text", source)
+        self.assertIn("driver.execute_async_script", source)
+        self.assertIn("neutral_fetch = _browser_fetch_text(driver, NEUTRAL_URL)", source)
+        self.assertIn('identity = _parse_identity(neutral_fetch.get("text") or "")', source)
+
     def test_probe_saves_local_marketplace_screenshots(self):
         source = PROBE.read_text(encoding="utf-8")
         self.assertIn("driver.save_screenshot", source)
