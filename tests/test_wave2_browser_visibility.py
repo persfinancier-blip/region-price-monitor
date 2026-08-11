@@ -32,12 +32,9 @@ class VisibleBrowserSmokeContractTests(unittest.TestCase):
     def test_live_runner_no_longer_uses_browser_smoke(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn("tools\\probe_browser_visibility.py", source)
-        # Do not pin the live runner to one later evidence phase. C06 only owns the
-        # invariant that browser smoke is historical and cannot become the active runner again.
-        self.assertTrue(
-            "tools\\probe_server_visibility.py" in source
-            or "tools\\probe_wb_current_endpoint.py" in source
-        )
+        # Historical C06 owns only this invariant. Later evidence cycles may replace
+        # each other without forcing this old regression to know the active runner.
+        self.assertIn("tools\\probe_", source)
 
 
 if __name__ == "__main__":
