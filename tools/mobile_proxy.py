@@ -37,6 +37,7 @@ _OPERATOR_FIELDS = (
     "org",
     "as",
     "asName",
+    "asname",
     "operator",
     "carrier",
     "company",
