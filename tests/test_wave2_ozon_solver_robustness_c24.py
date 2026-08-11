@@ -42,6 +42,14 @@ class OzonSolverRobustnessC24Tests(unittest.TestCase):
         ]
         self.assertEqual(_classify_batch(results, 3), "OZON_SOLVER_ROBUSTNESS_PARTIAL")
 
+    def test_continuity_loss_never_counts_as_solved(self):
+        results = [
+            {"outcome": "solved_continuity_lost", "continuity_ok": False},
+            {"outcome": "solved_continuity_lost", "continuity_ok": False},
+            {"outcome": "solved_continuity_lost", "continuity_ok": False},
+        ]
+        self.assertEqual(_classify_batch(results, 3), "OZON_SOLVER_ROBUSTNESS_BLOCKED")
+
     def test_preview_is_written_for_structured_solution(self):
         background = Image.new("RGBA", (160, 90), (240, 240, 240, 255))
         piece = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
