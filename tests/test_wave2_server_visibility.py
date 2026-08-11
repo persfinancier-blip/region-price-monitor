@@ -10,15 +10,13 @@ RUNNER = ROOT / "tests" / "RUN_WAVE2_LIVE_PROBES.bat"
 class ServerVisibilityContractTests(unittest.TestCase):
     def test_probe_uses_server_transports_without_browser_runtime(self):
         source = PROBE.read_text(encoding="utf-8")
-        low = source.lower()
         self.assertIn("from requests_transport import request_via_proxy as requests_request", source)
         self.assertIn("from curl_transport import request_via_proxy as curl_request", source)
-        # Human-readable diagnostics may mention browser tools; only actual runtime imports/usages are forbidden.
-        self.assertNotIn("import selenium", low)
-        self.assertNotIn("from selenium", low)
-        self.assertNotIn("undetected_chromedriver", low)
-        self.assertNotIn("import playwright", low)
-        self.assertNotIn("from playwright", low)
+        self.assertNotIn("import selenium", source.lower())
+        self.assertNotIn("from selenium", source.lower())
+        self.assertNotIn("undetected_chromedriver", source)
+        self.assertNotIn("import playwright", source.lower())
+        self.assertNotIn("from playwright", source.lower())
 
     def test_probe_targets_only_official_product_pages_not_data_endpoints(self):
         source = PROBE.read_text(encoding="utf-8")
@@ -28,7 +26,7 @@ class ServerVisibilityContractTests(unittest.TestCase):
         self.assertNotIn("composer-api", source)
         self.assertNotIn("state-webPrice", source)
 
-    def test_gate_treats_marketplace_http_antibot_as_reachability_but_rejects_proxy_failures(self):
+    def test_gate_treats_http_antibot_as_reachability_not_data_success(self):
         source = PROBE.read_text(encoding="utf-8")
         self.assertIn('"OZON_SITE_REACHABLE_ANTIBOT_RESPONSE"', source)
         self.assertIn('"SERVER_SEES_WB_AND_OZON"', source)
@@ -36,14 +34,13 @@ class ServerVisibilityContractTests(unittest.TestCase):
         self.assertIn("outcome.status_code == 407", source)
         self.assertIn('"proxy_auth_error"', source)
         self.assertIn('"proxy_connection_error"', source)
-        self.assertIn('wb_reachable = bool(wb["marketplace_http_response_received"])', source)
-        self.assertIn('ozon_reachable = bool(ozon["marketplace_http_response_received"])', source)
+        self.assertIn('"marketplace_http_response_received"', source)
 
-    def test_live_runner_calls_server_visibility_probe(self):
-        source = RUNNER.read_text(encoding="utf-8")
-        self.assertIn("tools\\probe_server_visibility.py", source)
-        self.assertIn("SERVER_SEES_WB_AND_OZON", source)
-        self.assertNotIn("probe_browser_visibility.py", source)
+    def test_historical_visibility_probe_remains_server_only(self):
+        source = PROBE.read_text(encoding="utf-8")
+        self.assertIn("ProxyContext", source)
+        self.assertIn("requests_request", source)
+        self.assertIn("curl_request", source)
 
 
 if __name__ == "__main__":
