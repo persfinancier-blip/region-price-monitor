@@ -10,17 +10,16 @@ if not exist "parser\core\venv\Scripts\python.exe" (
 )
 
 set "PYTHONPATH=%CD%\parser\core"
-"parser\core\venv\Scripts\python.exe" tools\probe_browser_visibility.py
+"parser\core\venv\Scripts\python.exe" tools\probe_server_visibility.py
 set "RC=%ERRORLEVEL%"
 
 echo.
 if "%RC%"=="0" (
-  echo [PASS] VISIBLE_BROWSER_SMOKE_FINISHED
-  echo Tell the developer what you saw on the WB and Ozon tabs.
-  echo Safe report: parser\core\local\probes\browser_visibility_report.json
+  echo [PASS] SERVER_SEES_WB_AND_OZON
+  echo Safe report: parser\core\local\probes\server_visibility_report.json
 ) else (
-  echo [FAIL] VISIBLE_BROWSER_SMOKE code=%RC%
-  echo Safe report: parser\core\local\probes\browser_visibility_report.json
+  echo [FAIL] SERVER_MARKETPLACE_VISIBILITY code=%RC%
+  echo Safe report: parser\core\local\probes\server_visibility_report.json
 )
 pause
 exit /b %RC%
