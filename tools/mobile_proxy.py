@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import json
 from pathlib import Path
 import re
@@ -103,6 +102,20 @@ def _identity(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _transport_auth_failed(transport: dict[str, Any]) -> bool:
+    status = transport.get("status_code")
+    text = " ".join(
+        str(transport.get(key) or "")
+        for key in ("message", "adapter_detail", "error", "detail")
+    ).lower()
+    return (
+        status == 407
+        or "proxy authentication required" in text
+        or "proxy authentication" in text
+        or ("407" in text and "proxy" in text)
+    )
+
+
 def find_mobile_proxy(
     *,
     proxy_server: str,
@@ -139,21 +152,26 @@ def find_mobile_proxy(
             timeout=30,
             allow_redirects=True,
         )
+        transport = outcome.safe_dict()
         payload = _decode_json(outcome.body) if outcome.ok else None
         identity = _identity(payload) if payload else None
         operator, operator_fields = _operator_evidence(payload) if payload else (None, {})
         mobile_flag = payload.get("mobile") if payload else None
+        auth_failed = _transport_auth_failed(transport)
 
         item = {
             "attempt": index,
             "session_id": session_id,
-            "transport": outcome.safe_dict(),
+            "transport": transport,
+            "proxy_auth_failed": auth_failed,
             "identity": identity,
             "operator": operator,
             "operator_fields": operator_fields,
             "accepted": bool(outcome.ok and payload and mobile_flag is True and operator),
         }
         attempts.append(item)
+        if auth_failed:
+            break
         if item["accepted"]:
             selected = {
                 "attempt": index,
@@ -166,6 +184,8 @@ def find_mobile_proxy(
 
     if selected:
         gate = "OZON_STICKY_MOBILE_OPERATOR_SELECTED"
+    elif any(a.get("proxy_auth_failed") for a in attempts):
+        gate = "OZON_STICKY_PROXY_AUTH_FAILED"
     elif any(a.get("identity", {}).get("mobile") is True for a in attempts if a.get("identity")):
         gate = "OZON_MOBILE_FLAG_SEEN_OPERATOR_UNPROVEN"
     elif any(a.get("transport", {}).get("ok") for a in attempts):
@@ -216,6 +236,7 @@ def main() -> int:
     print("=== Recovered sticky mobile proxy selector C16 ===")
     print("Rotate hold-session-session-<id> -> curl_cffi IP/operator check -> stop on mobile operator.")
     print("No Playwright. No Ozon request. No cookies. No browser.")
+    print("Diagnostic mode: proxy password input is VISIBLE but is never written to the SAFE REPORT.")
 
     try:
         if args.proxy:
@@ -223,7 +244,7 @@ def main() -> int:
         else:
             proxy_server = input("Proxy address (REQUIRED scheme://host:port): ").strip()
             proxy_user = input("Proxy username: ").strip()
-            proxy_password = getpass.getpass("Proxy password: ").strip()
+            proxy_password = input("Proxy password (VISIBLE, not saved): ").strip()
         report = find_mobile_proxy(
             proxy_server=proxy_server,
             proxy_user=proxy_user,
