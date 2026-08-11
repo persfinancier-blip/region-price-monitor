@@ -13,6 +13,7 @@ if str(CORE) not in sys.path:
     sys.path.insert(0, str(CORE))
 
 from curl_transport import request_via_proxy as curl_request_via_proxy
+from input_models import InputValidationError
 from transport import ProxyContext, ProxyContextError
 
 API_URL = "https://www.ozon.ru/api/entrypoint-api.bx/page/json/v2"
@@ -203,6 +204,8 @@ def _make_context(label: str) -> ProxyContext:
     proxy = input("Proxy address (REQUIRED scheme://host:port): ").strip()
     proxy_user = input("Proxy username: ").strip()
     proxy_password = input("Proxy password: ").strip()
+    if not proxy or not proxy_user or not proxy_password:
+        raise InputValidationError(f"{label}: proxy address, username and password are required")
     return ProxyContext.from_city(
         {"city": city, "proxy": proxy, "proxy_user": proxy_user, "proxy_password": proxy_password},
         require_explicit_scheme=True,
@@ -271,8 +274,9 @@ def main() -> int:
     try:
         context_a = _make_context("city A")
         context_b = _make_context("city B")
-    except ProxyContextError as exc:
-        print(f"[ERROR] PROXY_CONTEXT_INVALID: {exc}")
+    except (ProxyContextError, InputValidationError) as exc:
+        print(f"[ERROR] SECOND_PROXY_REQUIRED_OR_INVALID: {exc}")
+        print("C10 needs two fully specified proxy contexts for two distinct city egresses.")
         return 2
 
     result_a = _run_city(context_a, sku, cookies)
