@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -19,46 +21,71 @@ from probe_ozon_single_run_c23 import _selected_context
 DEFAULT_SKU = "3129447770"
 
 
+def _append_profile(found: dict[str, Path], path: Path | str | None) -> None:
+    if not path:
+        return
+    try:
+        candidate = Path(path).expanduser()
+    except Exception:
+        return
+    if (candidate / "cookies.json").exists():
+        try:
+            key = str(candidate.resolve()).lower()
+        except Exception:
+            key = str(candidate).lower()
+        found[key] = candidate
+
+
+def _profiles_from_root(found: dict[str, Path], root: Path) -> None:
+    if not root.exists() or not root.is_dir():
+        return
+    for path in sorted(root.iterdir()):
+        if path.is_dir():
+            _append_profile(found, path)
+
+
+def _profiles_from_config(found: dict[str, Path], core_dir: Path) -> None:
+    cfg_path = core_dir / "config.json"
+    if not cfg_path.exists():
+        return
+    try:
+        payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    for region in payload.get("regions", []) if isinstance(payload, dict) else []:
+        if not isinstance(region, dict):
+            continue
+        raw = region.get("ozon_profile_dir")
+        if not raw:
+            continue
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = core_dir / candidate
+        _append_profile(found, candidate)
+
+
 def _profiles() -> list[Path]:
-    root = config.PROFILES_DIR
-    if not root.exists():
-        return []
-    return sorted(
-        path
-        for path in root.iterdir()
-        if path.is_dir() and (path / "cookies.json").exists()
-    )
+    found: dict[str, Path] = {}
 
+    # Current G01 runtime-local profiles.
+    _profiles_from_root(found, config.PROFILES_DIR)
+    _profiles_from_config(found, CORE)
 
-def _choose_legacy_profile(*, already_authorized: bool) -> Path | None:
-    profiles = _profiles()
+    # Optional explicit legacy location without changing/copying secrets.
+    env_profile = os.getenv("RPM_LEGACY_OZON_PROFILE")
+    _append_profile(found, env_profile)
 
-    if not already_authorized:
-        print("\nSG04 did not return a price.")
-        answer = input("Run EXPLICIT SG05 authenticated legacy fallback? [y/N]: ").strip().lower()
-        if answer not in {"y", "yes", "д", "да"}:
-            return None
-    else:
-        print("\nSG04 did not return a price; this runner was explicitly started with SG05 fallback allowed.")
+    # Preserved legacy checkout locations used by this project on Windows.
+    legacy_cores = [
+        Path(r"C:\DEV\region-price-monitor\parser\core"),
+        Path(r"C:\Dev\region-price-monitor\parser\core"),
+        ROOT.parent / "region-price-monitor" / "parser" / "core",
+    ]
+    for core_dir in legacy_cores:
+        _profiles_from_root(found, core_dir / "profiles")
+        _profiles_from_config(found, core_dir)
 
-    if len(profiles) == 1:
-        print(f"Using the only local authenticated profile: {profiles[0]}")
-        return profiles[0]
-
-    if profiles:
-        print("Local profiles with cookies.json:")
-        for index, path in enumerate(profiles, 1):
-            print(f"  [{index}] {path}")
-        raw = input("Profile number, or paste profile directory: ").strip()
-        if raw.isdigit() and 1 <= int(raw) <= len(profiles):
-            return profiles[int(raw) - 1]
-        if raw:
-            return Path(raw)
-    else:
-        raw = input("Paste authenticated Ozon profile directory: ").strip()
-        if raw:
-            return Path(raw)
-    return None
+    return sorted(found.values(), key=lambda p: str(p).lower())
 
 
 def _args() -> argparse.Namespace:
@@ -72,6 +99,42 @@ def _args() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
+
+
+def _try_legacy_profiles(sku: str) -> dict:
+    profiles = _profiles()
+    if not profiles:
+        return {
+            "status": "legacy_profile_missing",
+            "error": "no authenticated Ozon profile with cookies.json was found",
+        }
+
+    print(f"[3/3] Trying {len(profiles)} preserved authenticated Ozon profile(s) ...")
+    failures: list[dict] = []
+    for index, profile in enumerate(profiles, 1):
+        print(f"      profile {index}/{len(profiles)}: {profile}")
+        cookies = ozon.load_cookies(profile)
+        legacy = ozon.fetch_price_legacy_authenticated(
+            sku,
+            cookies,
+            proxy=None,
+            save_debug=False,
+        )
+        if legacy.get("status") == "price":
+            legacy = dict(legacy)
+            legacy["legacy_profile"] = str(profile)
+            return legacy
+        failures.append({
+            "profile": str(profile),
+            "status": legacy.get("status"),
+            "error": legacy.get("error"),
+        })
+
+    return {
+        "status": "legacy_profiles_failed",
+        "error": "all discovered authenticated Ozon profiles failed",
+        "failures": failures,
+    }
 
 
 def main() -> int:
@@ -126,14 +189,11 @@ def main() -> int:
     else:
         print(f"detail={primary.get('error') or primary.get('transport_error')}")
 
-    profile = _choose_legacy_profile(already_authorized=args.legacy_on_challenge)
-    if profile is None:
+    if not args.legacy_on_challenge:
         print("[EVIDENCE] OZON_PRICE_PRIMARY_BLOCKED_FALLBACK_NOT_INVOKED")
         return 8
 
-    print(f"[3/3] Explicit SG05 authenticated legacy fallback: {profile}")
-    cookies = ozon.load_cookies(profile)
-    legacy = ozon.fetch_price_legacy_authenticated(sku, cookies, proxy=None, save_debug=False)
+    legacy = _try_legacy_profiles(sku)
     if legacy.get("status") == "price":
         print(
             f"PRICE: {legacy['price']} {legacy.get('currency', 'RUB')} "
@@ -143,6 +203,11 @@ def main() -> int:
         return 0
 
     print(f"SG05 RESULT: {legacy.get('status')} error={legacy.get('error')}")
+    for failure in legacy.get("failures", []):
+        print(
+            f"      failed profile: {failure.get('profile')} "
+            f"status={failure.get('status')} error={failure.get('error')}"
+        )
     print("[EVIDENCE] OZON_PRICE_EXPLICIT_LEGACY_FALLBACK_FAILED")
     return 8
 
