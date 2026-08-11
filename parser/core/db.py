@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""PostgreSQL: источник SKU и приёмник результатов. Авто-создаёт таблицы.
+"""PostgreSQL: источники входных данных и приёмник результатов. Авто-создаёт таблицы.
 Проверено против PostgreSQL 16."""
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+
+from input_models import CityRecord, normalize_city_record, normalize_product_rows
 
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
 except ImportError:
     psycopg2 = None
+    RealDictCursor = None
 
 
 class ParserDB:
@@ -55,6 +58,15 @@ class ParserDB:
                     )
                 """)
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS parser_cities (
+                        city VARCHAR(255) PRIMARY KEY,
+                        proxy TEXT NOT NULL,
+                        proxy_user TEXT NOT NULL,
+                        proxy_password TEXT NOT NULL,
+                        wb_dest VARCHAR(255)
+                    )
+                """)
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS parser_results (
                         id SERIAL PRIMARY KEY,
                         run_id VARCHAR(50),
@@ -83,20 +95,56 @@ class ParserDB:
                 sql = "SELECT sku, marketplace FROM parser_skus"
                 if active_only:
                     sql += " WHERE is_active = TRUE"
+                sql += " ORDER BY id"
                 cur.execute(sql)
-                products = {"wb": [], "ozon": []}
-                for row in cur.fetchall():
-                    mp = row["marketplace"].lower().strip()
-                    if mp in products:
-                        products[mp].append(str(row["sku"]))
-                return products
+                return normalize_product_rows(cur.fetchall(), source="parser_skus")
 
     def add_sku(self, sku, marketplace):
+        product = normalize_product_rows(
+            [{"sku": sku, "marketplace": marketplace}], source="parser_skus insert"
+        )
+        normalized_marketplace = "wb" if product["wb"] else "ozon"
+        normalized_sku = product[normalized_marketplace][0]
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("""INSERT INTO parser_skus (sku, marketplace) VALUES (%s, %s)
                                ON CONFLICT (sku, marketplace) DO NOTHING""",
-                            (str(sku), marketplace.lower()))
+                            (normalized_sku, normalized_marketplace))
+
+    # ── Города ──
+    def load_cities(self):
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT city, proxy, proxy_user, proxy_password, wb_dest
+                    FROM parser_cities
+                    ORDER BY city
+                """)
+                return [
+                    normalize_city_record(row, context=f"parser_cities row {index}")
+                    for index, row in enumerate(cur.fetchall(), start=1)
+                ]
+
+    def add_city(self, city):
+        record = normalize_city_record(city, context="parser_cities insert")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO parser_cities (city, proxy, proxy_user, proxy_password, wb_dest)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (city) DO UPDATE SET
+                        proxy = EXCLUDED.proxy,
+                        proxy_user = EXCLUDED.proxy_user,
+                        proxy_password = EXCLUDED.proxy_password,
+                        wb_dest = EXCLUDED.wb_dest
+                """, (
+                    record.city,
+                    record.proxy,
+                    record.proxy_user,
+                    record.proxy_password,
+                    record.wb_dest,
+                ))
+        return CityRecord(**record.as_dict())
 
     # ── Результаты ──
     def save_results(self, results, run_id=None):
