@@ -22,6 +22,14 @@ class OzonSessionCoherenceC27Tests(unittest.TestCase):
         self.assertIn('browser["browser_ip"] != selected_ip', SOURCE)
         self.assertIn('curl_ip != selected_ip or curl_ip != browser["browser_ip"]', SOURCE)
 
+    def test_real_tls_fingerprints_are_compared_before_ozon(self):
+        self.assertIn('TLS_FP_URL = "https://tls.browserleaks.com/json"', SOURCE)
+        self.assertIn('FINGERPRINT_KEYS = ("ja3_hash", "ja4", "akamai_hash")', SOURCE)
+        self.assertIn('OZON_C27_TLS_FINGERPRINT_MISMATCH', SOURCE)
+        compare_pos = SOURCE.index('[4/5] Comparing real TLS/HTTP2 fingerprints')
+        ozon_pos = SOURCE.index('[5/5] Ozon price request with coherent session')
+        self.assertLess(compare_pos, ozon_pos)
+
     def test_cookie_values_are_not_persisted(self):
         self.assertIn('Cookie values are memory-only', SOURCE)
         self.assertNotIn('write_text(json.dumps(browser["cookies"]', SOURCE)
