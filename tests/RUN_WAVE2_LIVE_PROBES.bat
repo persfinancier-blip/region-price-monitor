@@ -10,16 +10,16 @@ if not exist "parser\core\venv\Scripts\python.exe" (
 )
 
 set "PYTHONPATH=%CD%\parser\core"
-"parser\core\venv\Scripts\python.exe" tools\probe_server_visibility.py
+"parser\core\venv\Scripts\python.exe" tools\probe_wb_current_endpoint.py
 set "RC=%ERRORLEVEL%"
 
 echo.
 if "%RC%"=="0" (
-  echo [PASS] SERVER_SEES_WB_AND_OZON
-  echo Safe report: parser\core\local\probes\server_visibility_report.json
+  echo [PASS] WB_CURRENT_ENDPOINT_DATA_ACCESS_PROVEN
+  echo Safe report: parser\core\local\probes\wb_current_endpoint_report.json
 ) else (
-  echo [FAIL] SERVER_MARKETPLACE_VISIBILITY code=%RC%
-  echo Safe report: parser\core\local\probes\server_visibility_report.json
+  echo [EVIDENCE] WB_CURRENT_ENDPOINT_NOT_YET_PROVEN code=%RC%
+  echo Safe report: parser\core\local\probes\wb_current_endpoint_report.json
 )
 pause
 exit /b %RC%
