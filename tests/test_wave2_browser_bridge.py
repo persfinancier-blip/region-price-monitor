@@ -77,6 +77,18 @@ class Wave2BrowserBridgeTests(unittest.TestCase):
             upstream.server_close()
             thread.join(timeout=3)
 
+    def test_incidental_plain_http_probe_is_local_204_and_not_bridge_error(self):
+        context = self._context("https://proxy.example:443")
+        with LocalBrowserProxyBridge(context) as bridge:
+            host, port = bridge.proxy_url.removeprefix("http://").split(":")
+            with socket.create_connection((host, int(port)), timeout=3) as client:
+                client.sendall(
+                    b"GET http://clients.example/test HTTP/1.1\r\nHost: clients.example\r\n\r\n"
+                )
+                response = client.recv(4096)
+            self.assertIn(b"204 No Content", response)
+            self.assertIsNone(bridge.last_error)
+
     def test_https_upstream_is_tls_wrapped_with_context_host(self):
         context = self._context("https://proxy.example:443")
         raw = MagicMock()
