@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
+import socket
 import sys
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -49,6 +53,80 @@ class FakeCurlClient:
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return FakeResponse(200, "direct-ok")
+
+
+class _AuthCaptureProxy:
+    """Tiny loopback CONNECT proxy used only to prove emitted Proxy-Authorization."""
+
+    def __init__(self, username: str, password: str):
+        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+        self.expected = f"Basic {token}"
+        self.seen_auth: list[str | None] = []
+        self._stop = threading.Event()
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind(("127.0.0.1", 0))
+        self._server.listen(5)
+        self._server.settimeout(0.2)
+        self.port = self._server.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        deadline = time.time() + 5
+        try:
+            while not self._stop.is_set() and time.time() < deadline:
+                try:
+                    conn, _ = self._server.accept()
+                except socket.timeout:
+                    continue
+                conn.settimeout(1)
+                try:
+                    data = b""
+                    while b"\r\n\r\n" not in data and len(data) < 65536:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                    text = data.decode("latin-1", errors="replace")
+                    auth = None
+                    for line in text.split("\r\n")[1:]:
+                        if line.lower().startswith("proxy-authorization:"):
+                            auth = line.split(":", 1)[1].strip()
+                            break
+                    self.seen_auth.append(auth)
+                    if auth == self.expected:
+                        # Correct auth is enough for this protocol test. Stop before any
+                        # external target networking by returning a deterministic tunnel error.
+                        conn.sendall(
+                            b"HTTP/1.1 502 Bad Gateway\r\n"
+                            b"Content-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+                        self._stop.set()
+                    else:
+                        conn.sendall(
+                            b"HTTP/1.1 407 Proxy Authentication Required\r\n"
+                            b"Proxy-Authenticate: Basic realm=\"wave2-test\"\r\n"
+                            b"Content-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+                finally:
+                    conn.close()
+        finally:
+            self._server.close()
+
+    def wait_for_expected(self, timeout: float = 5) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.expected in self.seen_auth:
+                return True
+            time.sleep(0.02)
+        return self.expected in self.seen_auth
+
+    def close(self):
+        self._stop.set()
+        self._thread.join(timeout=1)
 
 
 class Wave2TransportTests(unittest.TestCase):
@@ -110,6 +188,26 @@ class Wave2TransportTests(unittest.TestCase):
                 proxies={"https": "http://other-proxy:1"},
             )
 
+    def test_requests_real_library_emits_expected_basic_proxy_auth_on_https_connect(self):
+        username, password = "wave2-user", "wave2-pass"
+        proxy = _AuthCaptureProxy(username, password)
+        try:
+            context = ProxyContext.from_city({
+                "city": "Test",
+                "proxy": f"127.0.0.1:{proxy.port}",
+                "proxy_user": username,
+                "proxy_password": password,
+            })
+            requests_transport.request_via_proxy(
+                context,
+                "GET",
+                "https://example.invalid/",
+                timeout=2,
+            )
+            self.assertTrue(proxy.wait_for_expected(), proxy.seen_auth)
+        finally:
+            proxy.close()
+
     def test_curl_adapter_direct_path_uses_proxy_and_separate_proxy_auth(self):
         client = FakeCurlClient()
         outcome = curl_transport.request_via_proxy(
@@ -146,6 +244,30 @@ class Wave2TransportTests(unittest.TestCase):
         self.assertEqual(kwargs["proxy_auth"], ("user@corp", "secret/pass"))
         self.assertNotIn("proxies", kwargs)
         self.assertNotIn("impersonate", kwargs)
+
+    def test_curl_real_library_emits_expected_basic_proxy_auth_on_https_connect(self):
+        from curl_cffi import requests as creq
+
+        username, password = "wave2-user", "wave2-pass"
+        proxy = _AuthCaptureProxy(username, password)
+        try:
+            context = ProxyContext.from_city({
+                "city": "Test",
+                "proxy": f"127.0.0.1:{proxy.port}",
+                "proxy_user": username,
+                "proxy_password": password,
+            })
+            curl_transport.request_via_proxy(
+                context,
+                "GET",
+                "https://example.invalid/",
+                client=creq,
+                impersonate="edge",
+                timeout=2,
+            )
+            self.assertTrue(proxy.wait_for_expected(), proxy.seen_auth)
+        finally:
+            proxy.close()
 
     def test_curl_adapter_rejects_second_proxy_authority(self):
         for key, value in (
