@@ -110,7 +110,7 @@ class Wave2TransportTests(unittest.TestCase):
                 proxies={"https": "http://other-proxy:1"},
             )
 
-    def test_curl_adapter_direct_path_uses_proxy_context(self):
+    def test_curl_adapter_direct_path_uses_proxy_and_separate_proxy_auth(self):
         client = FakeCurlClient()
         outcome = curl_transport.request_via_proxy(
             self.context,
@@ -123,10 +123,14 @@ class Wave2TransportTests(unittest.TestCase):
         self.assertTrue(outcome.ok)
         self.assertEqual(len(client.calls), 1)
         kwargs = client.calls[0][1]
-        self.assertEqual(kwargs["proxies"], self.context.requests_proxies())
+        self.assertEqual(kwargs["proxy"], "http://proxy.example:8080")
+        self.assertEqual(kwargs["proxy_auth"], ("user@corp", "secret/pass"))
+        self.assertNotIn("user@corp", kwargs["proxy"])
+        self.assertNotIn("secret/pass", kwargs["proxy"])
+        self.assertNotIn("proxies", kwargs)
         self.assertEqual(kwargs["impersonate"], "edge")
 
-    def test_curl_adapter_session_path_uses_proxy_context(self):
+    def test_curl_adapter_session_path_uses_proxy_and_separate_proxy_auth(self):
         session = FakeSession()
         outcome = curl_transport.request_via_proxy(
             self.context,
@@ -137,18 +141,27 @@ class Wave2TransportTests(unittest.TestCase):
         )
         self.assertTrue(outcome.ok)
         self.assertEqual(len(session.calls), 1)
-        self.assertEqual(session.calls[0][1]["proxies"], self.context.requests_proxies())
-        self.assertNotIn("impersonate", session.calls[0][1])
+        kwargs = session.calls[0][1]
+        self.assertEqual(kwargs["proxy"], "http://proxy.example:8080")
+        self.assertEqual(kwargs["proxy_auth"], ("user@corp", "secret/pass"))
+        self.assertNotIn("proxies", kwargs)
+        self.assertNotIn("impersonate", kwargs)
 
     def test_curl_adapter_rejects_second_proxy_authority(self):
-        with self.assertRaises(curl_transport.CurlTransportError):
-            curl_transport.request_via_proxy(
-                self.context,
-                "GET",
-                "https://example.test/",
-                client=FakeCurlClient(),
-                proxies={"https": "http://other-proxy:1"},
-            )
+        for key, value in (
+            ("proxies", {"https": "http://other-proxy:1"}),
+            ("proxy", "http://other-proxy:1"),
+            ("proxy_auth", ("other", "secret")),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(curl_transport.CurlTransportError):
+                    curl_transport.request_via_proxy(
+                        self.context,
+                        "GET",
+                        "https://example.test/",
+                        client=FakeCurlClient(),
+                        **{key: value},
+                    )
 
     def test_browser_projection_is_derived_from_context_and_safe_to_repr(self):
         projection = self.context.browser_projection()
