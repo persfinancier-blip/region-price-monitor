@@ -26,5 +26,8 @@ Therefore:
 - SG04 primary remains runtime-blocked until a zero-human session/region mechanism is evidenced, or the project contract is explicitly changed by the owner;
 - mobile proxy is compatible as an underlying transport for this reader only when the same IP is used for warm and read; it is not proven to replace the cookie/session regional state.
 
+## Classification note
+This manual regional-session package is not automatically equivalent to SG05's authenticated personalized fallback contract. Reusing it under SG05 would require an explicit contract decision rather than silently treating anonymous/manual regional cookies and personalized authenticated cookies as the same mechanism.
+
 ## Security
 No cookie values or proxy credentials from the supplied material are committed here.
