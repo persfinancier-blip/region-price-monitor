@@ -21,8 +21,10 @@ LOCAL_PROBES = CORE / "local" / "probes"
 LOCAL_PROBES.mkdir(parents=True, exist_ok=True)
 REPORT_FILE = LOCAL_PROBES / "ozon_mobile_proxy_selector_report.json"
 
+# Recovered ASocks-style forms described by Claude.
 _SESSION_TAIL = re.compile(r"-hold-session-session-[A-Za-z0-9]+$", re.IGNORECASE)
-_HOLD_TAIL = re.compile(r"-hold-session(?:-session)?$", re.IGNORECASE)
+_HOLD_QUERY_TAIL = re.compile(r"-hold-query(?:-[A-Za-z0-9]+)?$", re.IGNORECASE)
+_HOLD_SESSION_TAIL = re.compile(r"-hold-session(?:-session)?$", re.IGNORECASE)
 
 _OPERATOR_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("MTS", (" mts", "mts ", "mobile telesystems", "mobile telesystem", "мтс")),
@@ -47,12 +49,15 @@ _OPERATOR_FIELDS = (
 
 
 def rotate_session(username: str, session_id: str | None = None) -> tuple[str, str]:
-    """Return username with exactly one ASocks-style sticky session suffix.
+    """Rotate a proxy login to exactly one ``hold-session-session-<id>`` suffix.
 
-    Supported inputs match the recovered Claude note:
+    Recovered/required input forms:
     - bare login;
-    - login ending in ``-hold-session`` / ``-hold-session-session``;
-    - login already ending in ``-hold-session-session-<id>``.
+    - ``...-hold-query`` (or ``...-hold-query-<old>``);
+    - already bound ``...-hold-session-session-<old>``.
+
+    Older ``...-hold-session`` / ``...-hold-session-session`` forms are also
+    accepted so the selector is backward compatible with earlier test data.
     """
     source = username.strip()
     if not source:
@@ -63,11 +68,13 @@ def rotate_session(username: str, session_id: str | None = None) -> tuple[str, s
 
     if _SESSION_TAIL.search(source):
         base = _SESSION_TAIL.sub("", source)
-        return f"{base}-hold-session-session-{sid}", sid
-    if _HOLD_TAIL.search(source):
-        base = _HOLD_TAIL.sub("", source)
-        return f"{base}-hold-session-session-{sid}", sid
-    return f"{source}-hold-session-session-{sid}", sid
+    elif _HOLD_QUERY_TAIL.search(source):
+        base = _HOLD_QUERY_TAIL.sub("", source)
+    elif _HOLD_SESSION_TAIL.search(source):
+        base = _HOLD_SESSION_TAIL.sub("", source)
+    else:
+        base = source
+    return f"{base}-hold-session-session-{sid}", sid
 
 
 def _decode_json(body: Any) -> dict[str, Any] | None:
@@ -82,7 +89,11 @@ def _decode_json(body: Any) -> dict[str, Any] | None:
 
 
 def _operator_evidence(payload: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
-    evidence = {field: payload.get(field) for field in _OPERATOR_FIELDS if payload.get(field) not in (None, "")}
+    evidence = {
+        field: payload.get(field)
+        for field in _OPERATOR_FIELDS
+        if payload.get(field) not in (None, "")
+    }
     haystack = " " + " ".join(str(value) for value in evidence.values()).lower() + " "
     for name, needles in _OPERATOR_PATTERNS:
         if any(needle in haystack for needle in needles):
@@ -117,6 +128,24 @@ def _transport_auth_failed(transport: dict[str, Any]) -> bool:
     )
 
 
+def _parse_combined_proxy(raw: str) -> tuple[str, str, str]:
+    """Parse Claude CLI form: host:port:user:pass or scheme://host:port:user:pass."""
+    value = raw.strip()
+    if not value:
+        raise ValueError("proxy is empty")
+    scheme = "https"
+    rest = value
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+    parts = rest.split(":", 3)
+    if len(parts) != 4:
+        raise ValueError("proxy must be host:port:user:pass or scheme://host:port:user:pass")
+    host, port, user, password = parts
+    if not host or not port or not user or not password:
+        raise ValueError("proxy fields cannot be blank")
+    return f"{scheme}://{host}:{port}", user, password
+
+
 def find_mobile_proxy(
     *,
     proxy_server: str,
@@ -124,9 +153,12 @@ def find_mobile_proxy(
     proxy_password: str,
     tries: int = 15,
     city_label: str = "mobile",
+    verbose: bool = True,
 ) -> dict[str, Any]:
+    """Rotate sticky sessions and stop on a known Russian mobile operator."""
     if tries < 1 or tries > 100:
         raise ValueError("tries must be between 1 and 100")
+
     attempts: list[dict[str, Any]] = []
     selected: dict[str, Any] | None = None
 
@@ -145,6 +177,9 @@ def find_mobile_proxy(
         except ProxyContextError as exc:
             raise ValueError(str(exc)) from exc
 
+        if verbose:
+            print(f"[{index:02d}/{tries}] session={session_id} -> checking IP/operator ...", flush=True)
+
         outcome = curl_request_via_proxy(
             context,
             "GET",
@@ -160,6 +195,7 @@ def find_mobile_proxy(
         mobile_flag = payload.get("mobile") if payload else None
         auth_failed = _transport_auth_failed(transport)
 
+        accepted = bool(outcome.ok and payload and mobile_flag is True and operator)
         item = {
             "attempt": index,
             "session_id": session_id,
@@ -168,12 +204,32 @@ def find_mobile_proxy(
             "identity": identity,
             "operator": operator,
             "operator_fields": operator_fields,
-            "accepted": bool(outcome.ok and payload and mobile_flag is True and operator),
+            "accepted": accepted,
         }
         attempts.append(item)
+
+        if verbose:
+            if auth_failed:
+                print("    AUTH FAILED (407/proxy authentication)", flush=True)
+            elif not outcome.ok:
+                print(
+                    f"    transport failed: status={transport.get('status_code')} "
+                    f"message={transport.get('message')}",
+                    flush=True,
+                )
+            elif payload is None:
+                print("    IP check returned non-JSON", flush=True)
+            else:
+                print(
+                    "    "
+                    f"ip={identity.get('query')} city={identity.get('city')} "
+                    f"mobile={identity.get('mobile')} operator={operator or 'UNKNOWN'}",
+                    flush=True,
+                )
+
         if auth_failed:
             break
-        if item["accepted"]:
+        if accepted:
             selected = {
                 "attempt": index,
                 "session_id": session_id,
@@ -181,6 +237,8 @@ def find_mobile_proxy(
                 "operator": operator,
                 "proxy_context": context.safe_identity,
             }
+            if verbose:
+                print(f"    SELECTED: {operator} / {identity.get('query')}", flush=True)
             break
 
     if selected:
@@ -195,7 +253,7 @@ def find_mobile_proxy(
         gate = "OZON_STICKY_PROXY_TRANSPORT_FAILED"
 
     return {
-        "goal": "reproduce_recovered_sticky_mobile_proxy_selector",
+        "goal": "reproduce_claude_sticky_mobile_proxy_selector_exactly",
         "neutral_url": NEUTRAL_URL,
         "tries_requested": tries,
         "proxy_context": f"{city_label}@{proxy_server}",
@@ -208,50 +266,34 @@ def find_mobile_proxy(
     }
 
 
-def _parse_combined_proxy(raw: str) -> tuple[str, str, str]:
-    value = raw.strip()
-    if not value:
-        raise ValueError("proxy is empty")
-    scheme = "https"
-    rest = value
-    if "://" in value:
-        scheme, rest = value.split("://", 1)
-    parts = rest.split(":")
-    if len(parts) != 4:
-        raise ValueError("combined --proxy must be host:port:user:pass or scheme://host:port:user:pass")
-    host, port, user, password = parts
-    if not host or not port or not user or not password:
-        raise ValueError("combined proxy fields cannot be blank")
-    return f"{scheme}://{host}:{port}", user, password
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Rotate sticky mobile proxy session IDs and stop on a known RU mobile operator."
+        description="Claude recovered sticky mobile selector: rotate session id and stop on RU mobile operator."
     )
     parser.add_argument("--proxy", help="host:port:user:pass or scheme://host:port:user:pass")
     parser.add_argument("--tries", type=int, default=15)
     parser.add_argument("--city", default="mobile")
+    parser.add_argument("--sku", help="accepted for compatibility with the recovered CLI; not used by selector-only C18")
+    parser.add_argument("--cookies", help="accepted for compatibility with the recovered CLI; not used by selector-only C18")
     args = parser.parse_args()
 
-    print("=== Recovered sticky mobile proxy selector C16 ===")
-    print("Rotate hold-session-session-<id> -> curl_cffi IP/operator check -> stop on mobile operator.")
-    print("No Playwright. No Ozon request. No cookies. No browser.")
-    print("Diagnostic mode: proxy password input is VISIBLE but is never written to the SAFE REPORT.")
+    print("=== Claude sticky mobile proxy test C18 ===")
+    print("rotate hold-session-session-<id> -> curl_cffi -> detect MTS/Beeline/MegaFon/Tele2/T2/Yota")
+    print("NO Playwright. NO browser. Password input is VISIBLE.")
+    print("Credentials are used in memory only and are NOT written to SAFE REPORT.")
 
     try:
-        if args.proxy:
-            proxy_server, proxy_user, proxy_password = _parse_combined_proxy(args.proxy)
-        else:
-            proxy_server = input("Proxy address (REQUIRED scheme://host:port): ").strip()
-            proxy_user = input("Proxy username: ").strip()
-            proxy_password = input("Proxy password (VISIBLE, not saved): ").strip()
+        proxy_raw = args.proxy
+        if not proxy_raw:
+            proxy_raw = input("Proxy (VISIBLE host:port:user:pass): ").strip()
+        proxy_server, proxy_user, proxy_password = _parse_combined_proxy(proxy_raw)
         report = find_mobile_proxy(
             proxy_server=proxy_server,
             proxy_user=proxy_user,
             proxy_password=proxy_password,
             tries=args.tries,
             city_label=args.city,
+            verbose=True,
         )
     except Exception as exc:
         print(f"[ERROR] MOBILE_PROXY_SELECTOR_FAILED: {type(exc).__name__}: {exc}")
@@ -261,7 +303,7 @@ def main() -> int:
     print("\n=== SAFE REPORT ===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     print(f"\n[INFO] Safe report saved to: {REPORT_FILE}")
-    print("[INFO] Proxy username/password are not persisted. Only generated sticky session ids and public egress metadata are reported.")
+    print("[INFO] Password/login are not persisted. Session ids and public egress metadata are reported.")
     print(f"[EVIDENCE] {report['gate']}")
     return 0 if report["gate"] == "OZON_STICKY_MOBILE_OPERATOR_SELECTED" else 8
 
