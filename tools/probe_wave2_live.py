@@ -21,7 +21,8 @@ from transport import ProxyContext, ProxyContextError, TransportKind
 
 LOCAL_PROBES = CORE / "local" / "probes"
 LOCAL_PROBES.mkdir(parents=True, exist_ok=True)
-NEUTRAL_PROXY_CHECK_URL = "https://i.pn"
+# Documented JSON endpoint. With no {query}, i.pn returns the current egress IP.
+NEUTRAL_PROXY_CHECK_URL = "https://api.i.pn/json/"
 
 
 def _sha256_text(text: str) -> str:
