@@ -27,6 +27,33 @@ def redact_transport_text(text: Any, *, secrets: tuple[str, ...] = ()) -> str:
 
 
 @dataclass(frozen=True, repr=False)
+class BrowserProxyProjection:
+    """SG02-owned credential projection; SG04 owns browser-specific adaptation."""
+
+    city: str
+    scheme: str
+    host: str
+    port: int
+    username: str
+    password: str
+
+    @property
+    def endpoint(self) -> str:
+        user = quote(self.username, safe="")
+        password = quote(self.password, safe="")
+        host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
+        return urlunsplit((self.scheme, f"{user}:{password}@{host}:{self.port}", "", "", ""))
+
+    @property
+    def safe_identity(self) -> str:
+        host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
+        return f"{self.city}@{self.scheme}://{host}:{self.port}"
+
+    def __repr__(self) -> str:
+        return f"BrowserProxyProjection(city={self.city!r}, safe_identity={self.safe_identity!r})"
+
+
+@dataclass(frozen=True, repr=False)
 class ProxyContext:
     city: str
     scheme: str
@@ -87,6 +114,16 @@ class ProxyContext:
     def requests_proxies(self) -> dict[str, str]:
         endpoint = self.endpoint
         return {"http": endpoint, "https": endpoint}
+
+    def browser_projection(self) -> BrowserProxyProjection:
+        return BrowserProxyProjection(
+            city=self.city,
+            scheme=self.scheme,
+            host=self.host,
+            port=self.port,
+            username=self.proxy_user,
+            password=self.proxy_password,
+        )
 
     def redact(self, value: Any) -> str:
         return redact_transport_text(value, secrets=(self.proxy_user, self.proxy_password))
