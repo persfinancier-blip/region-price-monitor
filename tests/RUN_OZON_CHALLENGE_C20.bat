@@ -31,16 +31,24 @@ if errorlevel 1 (
   )
 )
 
-echo [1/2] Deterministic local solver tests ...
-"%PY%" -m unittest tests.test_wave2_local_slider_solver tests.test_wave2_ozon_challenge_c20 -v
+echo [1/3] Deterministic local slider tests ...
+"%PY%" tests\test_wave2_local_slider_solver.py
 if errorlevel 1 (
-  echo [ERROR] C20_DETERMINISTIC_TESTS_FAILED
+  echo [ERROR] C20_LOCAL_SLIDER_TESTS_FAILED
   pause
   exit /b 3
 )
 
+echo [2/3] Deterministic challenge-safety tests ...
+"%PY%" tests\test_wave2_ozon_challenge_c20.py
+if errorlevel 1 (
+  echo [ERROR] C20_CHALLENGE_SAFETY_TESTS_FAILED
+  pause
+  exit /b 4
+)
+
 echo.
-echo [2/2] Live Ozon challenge capture/fingerprint ...
+echo [3/3] Live Ozon challenge capture/fingerprint ...
 "%PY%" tools\probe_ozon_challenge_c20.py
 set "RC=%ERRORLEVEL%"
 
