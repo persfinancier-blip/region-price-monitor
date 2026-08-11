@@ -34,13 +34,46 @@ def _body_text(body: str | bytes | None) -> str:
     return body or ""
 
 
-def _ip_identity(text: str) -> dict[str, Any] | None:
+def _json_payload(text: str) -> dict[str, Any] | None:
+    """Extract one JSON object from plain JSON, BOM text or a surrounding response wrapper."""
+    clean = text.lstrip("\ufeff \t\r\n")
     try:
-        payload = json.loads(text)
+        payload = json.loads(clean)
     except Exception:
-        return None
+        payload = None
+    if isinstance(payload, dict):
+        return payload
+
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", clean):
+        try:
+            candidate, _ = decoder.raw_decode(clean[match.start():])
+        except Exception:
+            continue
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _ip_identity(text: str) -> dict[str, Any] | None:
+    payload = _json_payload(text)
     if not isinstance(payload, dict):
-        return None
+        # Bounded fallback for providers that wrap the same fields in non-JSON text.
+        def string_field(name: str) -> str | None:
+            match = re.search(rf'["\']?{re.escape(name)}["\']?\s*[:=]\s*["\']([^"\']+)["\']', text, re.I)
+            return match.group(1).strip() if match else None
+
+        city = string_field("city")
+        query = string_field("query")
+        if not city and not query:
+            return None
+        payload = {
+            "query": query,
+            "countryCode": string_field("countryCode"),
+            "regionName": string_field("regionName"),
+            "city": city,
+        }
+
     return {
         "query": payload.get("query"),
         "countryCode": payload.get("countryCode"),
@@ -50,6 +83,22 @@ def _ip_identity(text: str) -> dict[str, Any] | None:
         "proxy": payload.get("proxy"),
         "hosting": payload.get("hosting"),
     }
+
+
+def _egress_location(identity: dict[str, Any] | None) -> tuple[str, str, str] | None:
+    if not isinstance(identity, dict) or not identity.get("city"):
+        return None
+    return (
+        str(identity.get("countryCode") or "").casefold(),
+        str(identity.get("regionName") or "").casefold(),
+        str(identity.get("city") or "").casefold(),
+    )
+
+
+def _save_neutral_body(name: str, text: str) -> str:
+    path = LOCAL_PROBES / f"neutral_{name}.txt"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
 
 
 def _stock_candidates(value: Any, path: str = "$") -> list[dict[str, Any]]:
@@ -130,6 +179,7 @@ def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
     if stdout:
         result["body_sha256"] = _sha256_text(stdout)
         result["identity"] = _ip_identity(stdout)
+        result["local_body_file"] = _save_neutral_body("native_curl", stdout)
     return result
 
 
@@ -161,27 +211,36 @@ def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
     }
     if requests_outcome.ok:
         result["requests_body_sha256"] = _sha256_text(requests_body)
+        result["requests_local_body_file"] = _save_neutral_body("requests", requests_body)
     if curl_outcome.ok:
         result["curl_body_sha256"] = _sha256_text(curl_body)
+        result["curl_local_body_file"] = _save_neutral_body("curl_cffi", curl_body)
 
     native_ok = bool(native_curl.get("ok"))
     all_transport_ok = native_ok and requests_outcome.ok and curl_outcome.ok
     identities = [native_identity, requests_identity, curl_identity]
-    identities_complete = all(isinstance(item, dict) and item.get("city") for item in identities)
-    city_matches = identities_complete and all(
-        str(item.get("city", "")).casefold() == context.city.casefold() for item in identities
+    locations = [_egress_location(item) for item in identities]
+    identities_complete = all(item is not None for item in locations)
+    egress_consistent = identities_complete and len(set(locations)) == 1
+    observed_city = None
+    if egress_consistent and isinstance(native_identity, dict):
+        observed_city = native_identity.get("city")
+
+    result["city_label"] = context.city
+    result["observed_egress_city"] = observed_city
+    result["city_label_matches_egress"] = bool(
+        observed_city and str(observed_city).casefold() == context.city.casefold()
     )
-    result["requested_city"] = context.city
     result["all_transport_ok"] = all_transport_ok
-    result["all_city_matches"] = bool(city_matches)
+    result["all_egress_locations_agree"] = bool(egress_consistent)
 
     kinds = {requests_outcome.kind, curl_outcome.kind}
-    if all_transport_ok and city_matches:
-        result["preliminary_gate"] = "PROXY_CITY_CONTEXT_CONFIRMED_ALL_STACKS"
+    if all_transport_ok and egress_consistent:
+        result["preliminary_gate"] = "PROXY_EGRESS_CONTEXT_CONFIRMED_ALL_STACKS"
     elif all_transport_ok and not identities_complete:
         result["preliminary_gate"] = "PROXY_IDENTITY_UNPROVEN"
-    elif all_transport_ok and not city_matches:
-        result["preliminary_gate"] = "PROXY_CITY_CONTEXT_MISMATCH"
+    elif all_transport_ok and not egress_consistent:
+        result["preliminary_gate"] = "PROXY_EGRESS_CONTEXT_MISMATCH"
     elif native_ok and not requests_outcome.ok:
         result["preliminary_gate"] = "REQUESTS_PROXY_PATH_MISMATCH"
     elif native_ok and requests_outcome.ok and not curl_outcome.ok:
@@ -306,7 +365,7 @@ def _probe_ozon(context: ProxyContext, sku: str) -> dict[str, Any]:
 def main() -> int:
     print("=== G01 Wave 2 live evidence probe ===")
     print("Credentials are used only in memory and are not written to the report.")
-    city = input("City name: ").strip()
+    city = input("City label: ").strip()
     proxy = input("Proxy address (REQUIRED scheme://host:port): ").strip()
     proxy_user = input("Proxy username: ").strip()
     proxy_password = input("Proxy password: ").strip()
@@ -337,7 +396,7 @@ def main() -> int:
         "ozon": None,
     }
 
-    proxy_gate_ok = proxy_checks.get("preliminary_gate") == "PROXY_CITY_CONTEXT_CONFIRMED_ALL_STACKS"
+    proxy_gate_ok = proxy_checks.get("preliminary_gate") == "PROXY_EGRESS_CONTEXT_CONFIRMED_ALL_STACKS"
 
     if wb_skus_raw:
         if proxy_gate_ok:
@@ -363,7 +422,7 @@ def main() -> int:
     print("\n=== SAFE REPORT ===")
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     print(f"\n[INFO] Safe report saved to: {report_file}")
-    print("[INFO] Raw WB/Ozon bodies, when captured, stay under parser/core/local/probes and are Git-ignored.")
+    print("[INFO] Neutral/WB/Ozon probe bodies stay under parser/core/local/probes and are Git-ignored.")
     return 0
 
 
