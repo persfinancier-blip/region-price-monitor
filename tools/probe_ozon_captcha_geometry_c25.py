@@ -23,6 +23,7 @@ from captcha.ozon_payload import OzonEmbeddedChallengeError, decode_captcha_url
 from captcha.slider import solve_piece_by_contour
 from mobile_proxy import _decode_json, _parse_combined_proxy, find_mobile_proxy
 from platform_utils import get_chrome_major_version
+from probe_browser_visibility import _browser_fetch_text
 from probe_ozon_reference_entrypoint import DEFAULT_SKU
 from probe_ozon_single_run_c23 import _fetch_bytes, _image_meta, _selected_context
 from probe_ozon_solver_robustness_c24 import _neutral_identity, _obtain_challenge
@@ -148,11 +149,10 @@ return {
 
 def _browser_identity(driver: Any) -> dict[str, Any] | None:
     driver.get(NEUTRAL_URL)
-    try:
-        text = driver.find_element("tag name", "body").text or ""
-    except Exception:
+    fetched = _browser_fetch_text(driver, NEUTRAL_URL)
+    if not fetched.get("ok"):
         return None
-    return _decode_json(text)
+    return _decode_json(fetched.get("text"))
 
 
 def _write_report(report: dict[str, Any]) -> None:
@@ -165,6 +165,7 @@ def _write_report(report: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    LOCAL.mkdir(parents=True, exist_ok=True)
     print("=== Ozon CAPTCHA DOM geometry calibration C25 ===")
     print("fresh sticky -> live challenge -> local solve -> hidden Chrome DOM geometry")
     print("NO click. NO drag. NO pointer/mouse automation. NO challenge submission.")
