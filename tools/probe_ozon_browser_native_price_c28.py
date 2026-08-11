@@ -21,6 +21,7 @@ from probe_ozon_single_run_c23 import _selected_context
 DEFAULT_SKU = "3129447770"
 HOME_URL = "https://www.ozon.ru/?__rr=1&abt_att=1"
 NEUTRAL_URL = "https://api.i.pn/json/"
+LOCAL_PROXY_FILE = CORE / "local" / "ozon_test_proxy.txt"
 ENDPOINTS = (
     ("entrypoint", "/api/entrypoint-api.bx/page/json/v2"),
     ("composer", "/api/composer-api.bx/page/json/v2"),
@@ -37,6 +38,17 @@ UI_CHALLENGE_MARKERS = (
 def _proxy_server(context) -> str:
     host = f"[{context.host}]" if ":" in context.host and not context.host.startswith("[") else context.host
     return f"{context.scheme}://{host}:{context.port}"
+
+
+def _load_proxy(cli_proxy: str | None) -> str:
+    if cli_proxy and cli_proxy.strip():
+        return cli_proxy.strip()
+    if LOCAL_PROXY_FILE.exists():
+        value = LOCAL_PROXY_FILE.read_text(encoding="utf-8").strip()
+        if value:
+            print(f"[INFO] Using local cached proxy: {LOCAL_PROXY_FILE}")
+            return value
+    return input("Proxy (VISIBLE host:port:user:pass): ").strip()
 
 
 def _browser_ip(page) -> str | None:
@@ -100,9 +112,9 @@ def main() -> int:
 
     print("=== Ozon browser-native price C28 ===")
     print("ONE browser. ONE sticky proxy/IP. Browser keeps its own full cookie jar and TLS/HTTP2 stack.")
-    print("No curl_cffi handoff. No CAPTCHA interaction/submission.\n")
+    print("Browser-native API fetch. No CAPTCHA interaction/submission.\n")
 
-    raw_proxy = args.proxy or input("Proxy (VISIBLE host:port:user:pass): ").strip()
+    raw_proxy = _load_proxy(args.proxy)
     try:
         proxy_server, proxy_user, proxy_password = _parse_combined_proxy(raw_proxy)
     except Exception as exc:
