@@ -29,7 +29,6 @@ STATE_FILE = LOCAL_PROBES / "ozon_zero_human_storage_state.json"
 RAW_FILE = LOCAL_PROBES / "ozon_zero_human_entrypoint.json"
 SCREENSHOT_FILE = LOCAL_PROBES / "ozon_zero_human_browser.png"
 
-# Only replay bounded non-secret frontend headers observed from the live browser.
 SAFE_REPLAY_HEADERS = {
     "accept",
     "accept-language",
@@ -50,6 +49,11 @@ ANTIBOT_MARKERS = (
     "доступ ограничен",
     "checking your browser",
     "challenge-platform",
+)
+NETWORK_DENIAL_MARKERS = (
+    "похоже, нет соединения",
+    "выключите vpn",
+    "обратиться в поддержку",
 )
 
 
@@ -84,9 +88,9 @@ def _safe_replay_headers(headers: dict[str, str]) -> dict[str, str]:
     return safe
 
 
-def _antibot(title: str, body: str) -> bool:
+def _contains_marker(title: str, body: str, markers: tuple[str, ...]) -> bool:
     sample = f"{title}\n{body[:5000]}".lower()
-    return any(marker in sample for marker in ANTIBOT_MARKERS)
+    return any(marker in sample for marker in markers)
 
 
 def _json_shape(text: str) -> tuple[bool, list[str] | None, int | None]:
@@ -119,12 +123,7 @@ def main() -> int:
 
     try:
         context = ProxyContext.from_city(
-            {
-                "city": city,
-                "proxy": proxy,
-                "proxy_user": proxy_user,
-                "proxy_password": proxy_password,
-            },
+            {"city": city, "proxy": proxy, "proxy_user": proxy_user, "proxy_password": proxy_password},
             require_explicit_scheme=True,
         )
     except ProxyContextError as exc:
@@ -149,25 +148,16 @@ def main() -> int:
         with LocalBrowserProxyBridge(context) as bridge:
             bridge_state = bridge.safe_state
             with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=True,
-                    proxy={"server": bridge.proxy_url},
-                    args=["--disable-dev-shm-usage"],
-                )
+                browser = p.chromium.launch(headless=True, proxy={"server": bridge.proxy_url}, args=["--disable-dev-shm-usage"])
                 browser_context = browser.new_context(locale="ru-RU")
                 page = browser_context.new_page()
 
                 def observe(request: Any) -> None:
                     nonlocal captured
-                    if captured is not None:
-                        return
-                    if not _entrypoint_for_sku(request.url, sku):
+                    if captured is not None or not _entrypoint_for_sku(request.url, sku):
                         return
                     headers = {str(k).lower(): str(v) for k, v in request.headers.items()}
-                    captured = {
-                        "url": request.url,
-                        "headers": _safe_replay_headers(headers),
-                    }
+                    captured = {"url": request.url, "headers": _safe_replay_headers(headers)}
 
                 page.on("request", observe)
                 try:
@@ -199,12 +189,7 @@ def main() -> int:
     except Exception as exc:
         browser_error = context.redact(f"{type(exc).__name__}: {exc}")
 
-    # Playwright is now fully closed. Only curl_cffi is allowed below this point.
-    cookie_dict = {
-        str(cookie.get("name")): str(cookie.get("value"))
-        for cookie in cookies
-        if cookie.get("name") and cookie.get("value") is not None
-    }
+    cookie_dict = {str(cookie.get("name")): str(cookie.get("value")) for cookie in cookies if cookie.get("name") and cookie.get("value") is not None}
 
     replay: TransportOutcome | None = None
     replay_text = ""
@@ -228,9 +213,12 @@ def main() -> int:
             RAW_FILE.write_text(replay_text, encoding="utf-8", errors="replace")
         json_ok, top_level_keys, widget_state_count = _json_shape(replay_text)
 
-    challenged = _antibot(browser_title, browser_body)
+    challenged = _contains_marker(browser_title, browser_body, ANTIBOT_MARKERS)
+    network_denied = _contains_marker(browser_title, browser_body, NETWORK_DENIAL_MARKERS)
     if browser_error and not captured and not cookies:
         gate = "OZON_ZERO_HUMAN_BROWSER_FAILED"
+    elif network_denied and captured is None:
+        gate = "OZON_ZERO_HUMAN_BROWSER_NETWORK_DENIED"
     elif challenged and captured is None:
         gate = "OZON_ZERO_HUMAN_BROWSER_CHALLENGED"
     elif captured is None:
@@ -257,6 +245,7 @@ def main() -> int:
             "navigation_error": browser_error,
             "title": browser_title,
             "antibot_marker": challenged,
+            "network_denial_marker": network_denied,
             "cookie_count": len(cookies),
             "storage_state_saved_local": STATE_FILE.exists(),
             "screenshot_saved_local": SCREENSHOT_FILE.exists(),
