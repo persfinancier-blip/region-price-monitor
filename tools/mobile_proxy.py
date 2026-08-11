@@ -37,7 +37,7 @@ _OPERATOR_FIELDS = (
     "isp",
     "org",
     "as",
-    "asname",
+    "asName",
     "operator",
     "carrier",
     "company",
@@ -97,6 +97,7 @@ def _identity(payload: dict[str, Any]) -> dict[str, Any]:
         "regionName": payload.get("regionName"),
         "city": payload.get("city"),
         "mobile": payload.get("mobile"),
+        "type": payload.get("type"),
         "proxy": payload.get("proxy"),
         "hosting": payload.get("hosting"),
     }
