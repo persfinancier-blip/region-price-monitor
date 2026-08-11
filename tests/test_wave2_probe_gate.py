@@ -9,8 +9,10 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "parser" / "core"
-if str(CORE) not in sys.path:
-    sys.path.insert(0, str(CORE))
+TOOLS = ROOT / "tools"
+for path in (CORE, TOOLS):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from transport import ProxyContext, TransportOutcome
 
@@ -125,16 +127,41 @@ class Wave2ProbeGateTests(unittest.TestCase):
         self.assertEqual(result["preliminary_gate"], "PROVIDER_REFERENCE_CURL_FAILED")
         self.assertFalse(result["all_transport_ok"])
 
-    def test_wb_comparison_matrix_is_v2_v4_cross_dest_and_no_dest(self):
-        variants = probe._wb_variants("-1075267")
-        self.assertEqual(
+    def test_same_egress_identity_requires_ip_and_location_match(self):
+        left = probe._ip_identity(self._body("Novosibirsk", "203.0.113.10"))
+        right = probe._ip_identity(self._body("Novosibirsk", "203.0.113.10"))
+        other_ip = probe._ip_identity(self._body("Novosibirsk", "203.0.113.11"))
+        self.assertTrue(probe._same_egress_identity(left, right))
+        self.assertFalse(probe._same_egress_identity(left, other_ip))
+
+    def test_wb_comparison_matrix_includes_archived_remaining_endpoints_and_geo_dest(self):
+        variants = probe._wb_variants("-1075267", "-555")
+        self.assertIn(
+            ("v1_with_input_dest", "https://card.wb.ru/cards/v1/detail", "-1075267"),
             variants,
-            [
-                ("v2_with_dest", "https://card.wb.ru/cards/v2/detail", "-1075267"),
-                ("v2_no_dest", "https://card.wb.ru/cards/v2/detail", None),
-                ("v4_with_dest", "https://card.wb.ru/cards/v4/detail", "-1075267"),
-                ("v4_no_dest", "https://card.wb.ru/cards/v4/detail", None),
-            ],
+        )
+        self.assertIn(("v1_with_geo_dest", "https://card.wb.ru/cards/v1/detail", "-555"), variants)
+        self.assertIn(("v1_no_dest", "https://card.wb.ru/cards/v1/detail", None), variants)
+        self.assertIn(
+            ("u_card_v2_with_input_dest", "https://u-card.wb.ru/cards/v2/detail", "-1075267"),
+            variants,
+        )
+        self.assertIn(
+            ("u_card_v2_with_geo_dest", "https://u-card.wb.ru/cards/v2/detail", "-555"),
+            variants,
+        )
+        self.assertIn(("u_card_v2_no_dest", "https://u-card.wb.ru/cards/v2/detail", None), variants)
+        self.assertEqual(len(variants), 12)
+
+    def test_wb_geo_dest_extraction_accepts_dest_and_xinfo_shapes(self):
+        self.assertEqual(probe._extract_wb_dest({"dest": "-1075267"}), "-1075267")
+        self.assertEqual(
+            probe._extract_wb_dest({"destWithPrefix": "123;-999"}),
+            "-999",
+        )
+        self.assertEqual(
+            probe._extract_wb_dest({"xinfo": "?curr=rub&dest=-777&spp=30"}),
+            "-777",
         )
 
     def test_wb_payload_evidence_records_exact_stock_path_without_price_inference(self):
@@ -193,6 +220,13 @@ class Wave2ProbeGateTests(unittest.TestCase):
         self.assertEqual(fields["price"], "2 682 ₽")
         self.assertNotIn("irrelevant", fields)
         self.assertEqual(evidence["out_of_stock_widget_keys"], ["webOutOfStock-foo"])
+
+    def test_ozon_city_markers_include_control_russian_alias_without_making_it_authority(self):
+        identity = probe._ip_identity(self._body("Novosibirsk"))
+        markers = probe._ozon_city_markers(identity)
+        self.assertIn("Novosibirsk", markers)
+        self.assertIn("Novosibirsk Oblast", markers)
+        self.assertIn("Новосибирск", markers)
 
 
 if __name__ == "__main__":
