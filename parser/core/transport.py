@@ -68,10 +68,16 @@ class ProxyContext:
         city: CityRecord | Mapping[str, Any],
         *,
         default_scheme: str = "http",
+        require_explicit_scheme: bool = False,
     ) -> "ProxyContext":
         record = normalize_city_record(city)
         proxy = record.proxy.strip()
-        if "://" not in proxy:
+        has_explicit_scheme = "://" in proxy
+        if not has_explicit_scheme:
+            if require_explicit_scheme:
+                raise ProxyContextError(
+                    "proxy scheme is required for live routing; use scheme://host:port"
+                )
             proxy = f"{default_scheme}://{proxy}"
         parsed = urlsplit(proxy)
         scheme = parsed.scheme.lower()
