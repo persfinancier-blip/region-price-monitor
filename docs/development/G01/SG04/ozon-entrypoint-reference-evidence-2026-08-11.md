@@ -48,3 +48,25 @@ Those claims require the recovered ZIP, `main.py`, CSV outputs, or corresponding
 This is a stronger reference for the Ozon **steady-state data reader** than the previously reviewed product-HTML reader: JSON endpoint + `curl_cffi` + regional cookies, no browser in routine reads.
 
 It still does not, by itself, satisfy SG04's autonomous primary acceptance because regional cookies are manually provisioned outside the server runtime. It should be tested as the exact owner-supplied Ozon data endpoint once fresh cookie/session evidence is available or the owner explicitly changes the provisioning contract.
+
+## C08 live zero-human result
+The owner executed the C08 headless-Playwright bootstrap twice on Windows, first with the workstation VPN enabled and then disabled. Both runs produced the same Ozon-rendered incident page with title `Похоже, нет соединения`; the page advised disabling VPN and included an incident identifier. The local browser-proxy bridge reported no internal error. A small cookie state was created, but the requested `entrypoint-api` request was never observed, so no curl_cffi replay occurred.
+
+The second run without workstation VPN means the workstation VPN alone does not explain the failure. C08 proved the browser reached Ozon content through the configured path, but Ozon refused to serve the normal application flow before entrypoint capture.
+
+The original generic `OZON_ZERO_HUMAN_ENTRYPOINT_NOT_OBSERVED` classification was too weak. The historical C08 probe has been repaired so this exact page is typed as `OZON_ZERO_HUMAN_BROWSER_NETWORK_DENIED` on future reruns.
+
+## C09 discriminator
+Before adding login/session complexity, discriminate route/IP denial from headless-specific denial.
+
+C09 compares `curl_cffi`, Playwright headless and Playwright headed using the same SG02 ProxyContext and requires matching neutral egress identity. Both browser modes then visit the same Ozon SKU with zero user interaction.
+
+Typed evidence includes:
+- `OZON_HEADLESS_SPECIFIC_DENIAL_EVIDENCED` — headless is denied while headed gets farther / observes entrypoint;
+- `OZON_ROUTE_DENIED_BOTH_BROWSER_MODES` — both modes receive the Ozon network/VPN denial on the same proven egress;
+- `OZON_BROWSER_PROXY_BINDING_UNPROVEN` — neutral egress identities do not match;
+- explicit entrypoint-observed gates for either mode.
+
+Headed success is diagnostic only. Linux production acceptance would still require a zero-human Linux/Xvfb or equivalent proof.
+
+No cookie values, proxy credentials or authorization headers are committed in this evidence note.
