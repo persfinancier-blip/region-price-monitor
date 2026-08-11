@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from getpass import getpass
 import hashlib
 import json
 from pathlib import Path
@@ -310,7 +309,7 @@ def main() -> int:
     city = input("City name: ").strip()
     proxy = input("Proxy address (REQUIRED scheme://host:port): ").strip()
     proxy_user = input("Proxy username: ").strip()
-    proxy_password = getpass("Proxy password (hidden): ")
+    proxy_password = input("Proxy password: ").strip()
     wb_skus_raw = input("WB SKU(s), separated by comma [Enter = skip WB]: ").strip()
     wb_dest = input("WB dest [Enter = also/only no-forced-dest probe]: ").strip() or None
     ozon_sku = input("Ozon SKU [Enter = skip Ozon]: ").strip()
