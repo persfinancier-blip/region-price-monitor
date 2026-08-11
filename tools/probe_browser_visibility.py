@@ -80,6 +80,19 @@ def _navigate(driver: Any, url: str) -> dict[str, Any]:
     return _snapshot(driver, url, error)
 
 
+def _save_screenshot(driver: Any, filename: str) -> dict[str, Any]:
+    path = LOCAL_PROBES / filename
+    try:
+        ok = bool(driver.save_screenshot(str(path)))
+    except Exception as exc:
+        return {
+            "saved": False,
+            "local_file": str(path),
+            "error": f"{type(exc).__name__}: {str(exc).splitlines()[0]}",
+        }
+    return {"saved": ok, "local_file": str(path)}
+
+
 def main() -> int:
     print("=== WB/Ozon visible browser smoke ===")
     print("Goal: only prove that real marketplace pages are visible through the configured proxy.")
@@ -181,6 +194,7 @@ def main() -> int:
             wb_url = f"https://www.wildberries.ru/catalog/{wb_sku}/detail.aspx"
             print(f"[OPEN] WB: {wb_url}")
             report["wb"] = _navigate(driver, wb_url)
+            report["wb"]["screenshot"] = _save_screenshot(driver, "browser_visibility_wb.png")
 
             try:
                 driver.switch_to.new_window("tab")
@@ -193,11 +207,13 @@ def main() -> int:
                 ozon_url = f"https://www.ozon.ru/product/{ozon_sku}/"
                 print(f"[OPEN] Ozon: {ozon_url}")
                 report["ozon"] = _navigate(driver, ozon_url)
+                report["ozon"]["screenshot"] = _save_screenshot(driver, "browser_visibility_ozon.png")
 
             REPORT_FILE.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
             print("\n=== SAFE REPORT ===")
             print(json.dumps(report, ensure_ascii=False, indent=2))
             print("\nInspect both visible browser tabs now.")
+            print("Local screenshots were saved under parser/core/local/probes for direct visual evidence.")
             print("We only care whether the real WB and Ozon pages are visibly usable.")
             input("Press Enter when you are done looking at the pages; Chrome will then close...")
             return 0
