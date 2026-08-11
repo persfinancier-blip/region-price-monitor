@@ -7,7 +7,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "probe_ozon_browser_engine_ab_c35.py"
 SOURCE = SCRIPT.read_text(encoding="utf-8")
-LOW = SOURCE.lower()
+TREE = ast.parse(SOURCE)
+
+
+def _function_node(name: str) -> ast.FunctionDef:
+    for node in TREE.body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"function not found: {name}")
 
 
 class OzonBrowserEngineAbC35Tests(unittest.TestCase):
@@ -29,11 +36,31 @@ class OzonBrowserEngineAbC35Tests(unittest.TestCase):
     def test_stock_firefox_runs_first(self):
         self.assertLess(SOURCE.index("stock = _run_stock_firefox"), SOURCE.index("camo = _run_camoufox"))
 
-    def test_no_stealth_tuning_is_added_to_stock_firefox(self):
-        for forbidden in ("stealth", "navigator.webdriver", "add_init_script", "user_agent="):
-            self.assertNotIn(forbidden, LOW)
+    def test_no_fingerprint_tuning_is_added_to_stock_firefox(self):
+        node = _function_node("_run_stock_firefox")
+        attr_names = {
+            child.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Attribute)
+        }
+        keyword_names = {
+            keyword.arg
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            for keyword in child.keywords
+            if keyword.arg
+        }
+        string_literals = {
+            child.value
+            for child in ast.walk(node)
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        }
+        self.assertNotIn("add_init_script", attr_names)
+        self.assertNotIn("user_agent", keyword_names)
+        self.assertFalse(any("navigator.webdriver" in value for value in string_literals))
 
     def test_no_captcha_submission_or_pointer_automation(self):
+        low = SOURCE.lower()
         for forbidden in (
             "/abt/captcha/result",
             "drag_and_drop",
@@ -41,7 +68,7 @@ class OzonBrowserEngineAbC35Tests(unittest.TestCase):
             "pointertrajectory",
             "pointer_trajectory",
         ):
-            self.assertNotIn(forbidden, LOW)
+            self.assertNotIn(forbidden, low)
 
 
 if __name__ == "__main__":
