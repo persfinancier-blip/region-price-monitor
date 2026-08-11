@@ -35,6 +35,12 @@ class OzonZeroHumanBootstrapContractTests(unittest.TestCase):
         self.assertIn("no manual captcha solving", prompt.lower())
         self.assertIn("no manual city/PVZ selection", prompt)
 
+    def test_ozon_network_incident_page_is_not_mislabeled_as_plain_missing_entrypoint(self):
+        source = PROBE.read_text(encoding="utf-8").lower()
+        self.assertIn("похоже, нет соединения", source)
+        self.assertIn("выключите vpn", source)
+        self.assertIn("ozon_zero_human_browser_network_denied", source)
+
     def test_ozon_runner_is_separate_from_active_wb_live_runner(self):
         runner = RUNNER.read_text(encoding="utf-8")
         main_runner = MAIN_LIVE_RUNNER.read_text(encoding="utf-8")
