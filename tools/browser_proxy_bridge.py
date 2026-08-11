@@ -146,10 +146,6 @@ class _BridgeHandler(socketserver.BaseRequestHandler):
             browser_header = _read_headers(self.request)
             method = _request_method(browser_header)
             if method != "CONNECT":
-                # Chrome may emit background plain-HTTP connectivity/time probes even when
-                # the target marketplace navigation is HTTPS. They are not part of the
-                # bounded evidence path and must not poison last_error or become a second
-                # proxy-routing authority.
                 self.request.sendall(
                     b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 )
@@ -161,7 +157,6 @@ class _BridgeHandler(socketserver.BaseRequestHandler):
             upstream_header = _read_headers(upstream)
             status = _status_code(upstream_header)
             if status != 200:
-                # Preserve provider HTTP status for Chrome while never surfacing credentials.
                 self.request.sendall(upstream_header or b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                 return
             self.request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -181,14 +176,7 @@ class _BridgeHandler(socketserver.BaseRequestHandler):
 
 
 class LocalBrowserProxyBridge:
-    """One-process loopback CONNECT bridge derived only from one ProxyContext.
-
-    Chrome receives an unauthenticated localhost HTTP proxy URL. The bridge applies
-    the upstream scheme/host/port/Basic auth from the supplied ProxyContext and has
-    no separate credential/config authority. It exists only for bounded browser
-    evidence/bootstrap work. Incidental plain-HTTP Chrome background probes are
-    answered locally and are not forwarded or treated as evidence failures.
-    """
+    """One-process loopback CONNECT bridge derived only from one ProxyContext."""
 
     def __init__(self, context: ProxyContext):
         if not isinstance(context, ProxyContext):
