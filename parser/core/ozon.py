@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Ozon (скрытый режим, headless — работает на сервере).
+"""Ozon current curl_cffi parser bound to SG02 ProxyContext transport.
 
-Цена берётся СТРОГО из виджета webPrice запрошенного товара (JSON в HTML),
-а не общим поиском ₽ (тот хватал чужие цены — рекомендации/рассрочку).
-API у Ozon нет — запрос идёт на HTML страницы товара, цена внутри неё.
-Импортирует только curl_cffi (без браузера) → безопасно на Linux-сервере.
+SG04 still owns cookie-free regional bootstrap/context verification. This module
+preserves the current cookie/price semantics while routing every curl network
+call through one city-bound ProxyContext and surfacing transport failures.
 """
-import re
+from __future__ import annotations
+
 import json
+import re
 
 from config import OZON_STRATEGIES, DEBUG_DIR
+from curl_transport import request_via_proxy
+from transport import ProxyContext, TransportOutcome
 
 
 def _num(t):
@@ -39,51 +42,115 @@ def parse_price(html):
     if not price:
         return None
     return {
-        "price": price,               # основная (по Ozon-карте)
+        "price": price,
         "price_card": card,
         "price_regular": reg,
         "price_original": orig,
-        "price_base": orig or reg,    # «было» для совместимости со схемой
+        "price_base": orig or reg,
         "currency": "RUB",
         "is_available": bool(st.get("isAvailable", True)),
         "source": "webPrice-state",
     }
 
 
-def fetch_price(sku, cookies_list, proxy=None, save_debug=False):
-    """Тихий curl_cffi/edge по кукам. Возвращает dict цены, или {'error': '403'|'200_no_price'}."""
-    from curl_cffi import requests as creq  # импорт здесь: не нужен, пока не парсим
-    proxies = {"https": proxy, "http": proxy} if proxy else None
+def _transport_failure(sku, outcome: TransportOutcome):
+    return {
+        "sku": sku,
+        "transport_error": outcome.safe_dict(),
+    }
+
+
+def fetch_price(sku, cookies_list, proxy_context: ProxyContext, save_debug=False):
+    """Current cookie-based Ozon path, transport-bound to ProxyContext.
+
+    No direct/no-proxy retry exists. Cookie removal and autonomous requested-city
+    bootstrap are deliberately deferred to SG04.
+    """
+    if not isinstance(proxy_context, ProxyContext):
+        return _transport_failure(
+            sku,
+            TransportOutcome.from_exception(
+                ValueError("Ozon primary HTTP transport requires ProxyContext"),
+                adapter_detail="ozon",
+            ),
+        )
+
+    from curl_cffi import requests as creq  # imported only when Ozon is invoked
+
     url = f"https://www.ozon.ru/product/{sku}/"
+    last_failure: TransportOutcome | None = None
+
     for imp, use_session in OZON_STRATEGIES:
-        try:
-            if use_session:
-                s = creq.Session(impersonate=imp)
-                for c in cookies_list:
-                    dom = c.get("domain", ".ozon.ru").lstrip(".")
-                    s.cookies.set(c["name"], c["value"], domain=dom, path=c.get("path", "/"))
-                s.get("https://www.ozon.ru/", proxies=proxies, timeout=15)
-                r = s.get(url, proxies=proxies, timeout=30)
-            else:
-                cd = {c["name"]: c["value"] for c in cookies_list}
-                creq.get("https://www.ozon.ru/", cookies=cd, impersonate=imp, proxies=proxies, timeout=15)
-                r = creq.get(url, cookies=cd, impersonate=imp, proxies=proxies, timeout=30)
-            print(f"      [Ozon curl_cffi/edge/{'session' if use_session else 'dict'}] HTTP {r.status_code}")
-            if r.status_code == 200:
-                if save_debug:
-                    (DEBUG_DIR / f"ozon_200_{sku}.html").write_text(r.text, encoding="utf-8")
-                res = parse_price(r.text)
-                if res:
-                    res["sku"] = sku
-                    return res
-                return {"sku": sku, "error": "200_no_price"}
-        except Exception as e:
-            print(f"      [Ozon {imp}] {e}")
-    return {"sku": sku, "error": "403"}
+        if use_session:
+            session = creq.Session(impersonate=imp)
+            for c in cookies_list:
+                dom = c.get("domain", ".ozon.ru").lstrip(".")
+                session.cookies.set(c["name"], c["value"], domain=dom, path=c.get("path", "/"))
+            warm = request_via_proxy(
+                proxy_context,
+                "GET",
+                "https://www.ozon.ru/",
+                session=session,
+                timeout=15,
+            )
+            if not warm.ok:
+                last_failure = warm
+                continue
+            outcome = request_via_proxy(
+                proxy_context,
+                "GET",
+                url,
+                session=session,
+                timeout=30,
+            )
+        else:
+            cookie_dict = {c["name"]: c["value"] for c in cookies_list}
+            warm = request_via_proxy(
+                proxy_context,
+                "GET",
+                "https://www.ozon.ru/",
+                client=creq,
+                cookies=cookie_dict,
+                impersonate=imp,
+                timeout=15,
+            )
+            if not warm.ok:
+                last_failure = warm
+                continue
+            outcome = request_via_proxy(
+                proxy_context,
+                "GET",
+                url,
+                client=creq,
+                cookies=cookie_dict,
+                impersonate=imp,
+                timeout=30,
+            )
+
+        if not outcome.ok:
+            last_failure = outcome
+            continue
+
+        html = outcome.body.decode("utf-8", errors="replace") if isinstance(outcome.body, bytes) else (outcome.body or "")
+        if save_debug:
+            (DEBUG_DIR / f"ozon_200_{sku}.html").write_text(html, encoding="utf-8")
+        result = parse_price(html)
+        if result:
+            result["sku"] = sku
+            return result
+        return {"sku": sku, "error": "200_no_price"}
+
+    if last_failure is not None:
+        return _transport_failure(sku, last_failure)
+    return _transport_failure(
+        sku,
+        TransportOutcome.from_exception(RuntimeError("Ozon strategies exhausted"), context=proxy_context),
+    )
 
 
 def load_cookies(profile_dir):
     from pathlib import Path
+
     ck = Path(profile_dir) / "cookies.json"
     if not ck.exists():
         return None
