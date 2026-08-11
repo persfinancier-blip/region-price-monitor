@@ -22,7 +22,6 @@ from transport import ProxyContext, ProxyContextError, TransportKind
 
 LOCAL_PROBES = CORE / "local" / "probes"
 LOCAL_PROBES.mkdir(parents=True, exist_ok=True)
-# Exact neutral target shown by the proxy provider in its generated curl command.
 NEUTRAL_PROXY_CHECK_URL = "https://i.pn"
 
 
@@ -34,6 +33,24 @@ def _body_text(body: str | bytes | None) -> str:
     if isinstance(body, bytes):
         return body.decode("utf-8", errors="replace")
     return body or ""
+
+
+def _ip_identity(text: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {
+        "query": payload.get("query"),
+        "countryCode": payload.get("countryCode"),
+        "regionName": payload.get("regionName"),
+        "city": payload.get("city"),
+        "mobile": payload.get("mobile"),
+        "proxy": payload.get("proxy"),
+        "hosting": payload.get("hosting"),
+    }
 
 
 def _stock_candidates(value: Any, path: str = "$") -> list[dict[str, Any]]:
@@ -67,14 +84,12 @@ def _city_snippets(text: str, city: str, limit: int = 5) -> list[str]:
             break
         left = max(0, pos - 80)
         right = min(len(text), pos + len(city) + 80)
-        snippet = re.sub(r"\s+", " ", text[left:right])
-        snippets.append(snippet)
+        snippets.append(re.sub(r"\s+", " ", text[left:right]))
         start = pos + len(needle)
     return snippets
 
 
 def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
-    """Replicate provider curl semantics without exposing credentials in argv/report."""
     curl_bin = shutil.which("curl.exe") or shutil.which("curl")
     if not curl_bin:
         return {"available": False, "ok": False, "error": "CURL_NOT_FOUND"}
@@ -115,7 +130,7 @@ def _native_curl_proxy_check(context: ProxyContext) -> dict[str, Any]:
     }
     if stdout:
         result["body_sha256"] = _sha256_text(stdout)
-        result["body_preview"] = re.sub(r"\s+", " ", stdout.strip())[:200]
+        result["identity"] = _ip_identity(stdout)
     return result
 
 
@@ -129,22 +144,45 @@ def _proxy_self_check(context: ProxyContext) -> dict[str, Any]:
         impersonate="edge",
         timeout=20,
     )
+
+    requests_body = _body_text(requests_outcome.body)
+    curl_body = _body_text(curl_outcome.body)
+    requests_identity = _ip_identity(requests_body) if requests_outcome.ok else None
+    curl_identity = _ip_identity(curl_body) if curl_outcome.ok else None
+    native_identity = native_curl.get("identity")
+
     result: dict[str, Any] = {
         "url": NEUTRAL_PROXY_CHECK_URL,
         "proxy_scheme": context.scheme,
         "native_curl": native_curl,
         "requests": requests_outcome.safe_dict(),
         "curl_cffi": curl_outcome.safe_dict(),
+        "requests_identity": requests_identity,
+        "curl_cffi_identity": curl_identity,
     }
     if requests_outcome.ok:
-        result["requests_body_sha256"] = _sha256_text(_body_text(requests_outcome.body))
+        result["requests_body_sha256"] = _sha256_text(requests_body)
     if curl_outcome.ok:
-        result["curl_body_sha256"] = _sha256_text(_body_text(curl_outcome.body))
+        result["curl_body_sha256"] = _sha256_text(curl_body)
+
+    native_ok = bool(native_curl.get("ok"))
+    all_transport_ok = native_ok and requests_outcome.ok and curl_outcome.ok
+    identities = [native_identity, requests_identity, curl_identity]
+    identities_complete = all(isinstance(item, dict) and item.get("city") for item in identities)
+    city_matches = identities_complete and all(
+        str(item.get("city", "")).casefold() == context.city.casefold() for item in identities
+    )
+    result["requested_city"] = context.city
+    result["all_transport_ok"] = all_transport_ok
+    result["all_city_matches"] = bool(city_matches)
 
     kinds = {requests_outcome.kind, curl_outcome.kind}
-    native_ok = bool(native_curl.get("ok"))
-    if native_ok and requests_outcome.ok and curl_outcome.ok:
-        result["preliminary_gate"] = "PROXY_CONNECTIVITY_CONFIRMED_ALL_STACKS"
+    if all_transport_ok and city_matches:
+        result["preliminary_gate"] = "PROXY_CITY_CONTEXT_CONFIRMED_ALL_STACKS"
+    elif all_transport_ok and not identities_complete:
+        result["preliminary_gate"] = "PROXY_IDENTITY_UNPROVEN"
+    elif all_transport_ok and not city_matches:
+        result["preliminary_gate"] = "PROXY_CITY_CONTEXT_MISMATCH"
     elif native_ok and not requests_outcome.ok:
         result["preliminary_gate"] = "REQUESTS_PROXY_PATH_MISMATCH"
     elif native_ok and requests_outcome.ok and not curl_outcome.ok:
@@ -165,12 +203,7 @@ def _probe_wb(context: ProxyContext, skus: list[str], dest: str | None) -> dict[
         variants.append(("with_dest", dest))
 
     for label, effective_dest in variants:
-        params = {
-            "appType": 1,
-            "curr": "rub",
-            "spp": 30,
-            "nm": ";".join(skus),
-        }
+        params = {"appType": 1, "curr": "rub", "spp": 30, "nm": ";".join(skus)}
         if effective_dest is not None:
             params["dest"] = effective_dest
 
@@ -182,10 +215,7 @@ def _probe_wb(context: ProxyContext, skus: list[str], dest: str | None) -> dict[
             headers=WB_HEADERS,
             timeout=20,
         )
-        item: dict[str, Any] = {
-            "variant": label,
-            "transport": outcome.safe_dict(),
-        }
+        item: dict[str, Any] = {"variant": label, "transport": outcome.safe_dict()}
         body = _body_text(outcome.body)
         if outcome.ok:
             path = LOCAL_PROBES / f"wb_{label}.json"
@@ -257,7 +287,9 @@ def _probe_ozon(context: ProxyContext, sku: str) -> dict[str, Any]:
     result["local_body_file"] = str(html_file)
     low = html.lower()
     result["has_webprice_state"] = "state-webprice-" in low
-    result["challenge_detected"] = any(token in low for token in ("captcha", "checking your browser", "проверка браузера", "капча"))
+    result["challenge_detected"] = any(
+        token in low for token in ("captcha", "checking your browser", "проверка браузера", "капча")
+    )
     result["requested_city_literal_found"] = context.city.lower() in low
     result["city_snippets"] = _city_snippets(html, context.city)
     try:
@@ -294,23 +326,22 @@ def main() -> int:
             require_explicit_scheme=True,
         )
     except ProxyContextError as exc:
-        safe_error = str(exc)
-        print(f"\n[ERROR] PROXY_SCHEME_OR_ADDRESS_INVALID: {safe_error}")
+        print(f"\n[ERROR] PROXY_SCHEME_OR_ADDRESS_INVALID: {exc}")
         print("Use the protocol configured by the provider, for example https://host:443.")
         return 2
 
+    proxy_checks = _proxy_self_check(context)
     report: dict[str, Any] = {
         "proxy_context": context.safe_identity,
-        "proxy_checks": _proxy_self_check(context),
+        "proxy_checks": proxy_checks,
         "wb": None,
         "ozon": None,
     }
 
-    requests_proxy_ok = report["proxy_checks"]["requests"]["ok"]
-    curl_proxy_ok = report["proxy_checks"]["curl_cffi"]["ok"]
+    proxy_gate_ok = proxy_checks.get("preliminary_gate") == "PROXY_CITY_CONTEXT_CONFIRMED_ALL_STACKS"
 
     if wb_skus_raw:
-        if requests_proxy_ok:
+        if proxy_gate_ok:
             wb_skus = [part.strip() for part in re.split(r"[,;]", wb_skus_raw) if part.strip()]
             report["wb"] = _probe_wb(context, wb_skus, wb_dest)
         else:
@@ -319,7 +350,7 @@ def main() -> int:
                 "preliminary_gate": "WB_STOCK_CONTRACT_UNPROVEN",
             }
     if ozon_sku:
-        if curl_proxy_ok:
+        if proxy_gate_ok:
             report["ozon"] = _probe_ozon(context, ozon_sku)
         else:
             report["ozon"] = {
