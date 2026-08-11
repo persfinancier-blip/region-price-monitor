@@ -16,6 +16,12 @@ class VisibleBrowserSmokeContractTests(unittest.TestCase):
         self.assertNotIn("card.wb.ru", source)
         self.assertNotIn("composer-api", source)
 
+    def test_probe_saves_local_marketplace_screenshots(self):
+        source = PROBE.read_text(encoding="utf-8")
+        self.assertIn("driver.save_screenshot", source)
+        self.assertIn('"browser_visibility_wb.png"', source)
+        self.assertIn('"browser_visibility_ozon.png"', source)
+
     def test_runner_calls_visibility_probe(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn("tools\\probe_browser_visibility.py", source)
