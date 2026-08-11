@@ -38,6 +38,7 @@ class MobileProxySelectorTests(unittest.TestCase):
             ({"isp": "MTS PJSC"}, "MTS"),
             ({"org": "PJSC VimpelCom"}, "BEELINE"),
             ({"asName": "MegaFon"}, "MEGAFON"),
+            ({"asname": "MegaFon"}, "MEGAFON"),
             ({"carrier": "T2 Mobile"}, "TELE2_T2"),
             ({"network": "Scartel Ltd"}, "YOTA"),
         ]
@@ -50,6 +51,28 @@ class MobileProxySelectorTests(unittest.TestCase):
     def test_unknown_operator_does_not_pass(self):
         operator, _ = mobile_proxy._operator_evidence({"isp": "Unknown Telecom"})
         self.assertIsNone(operator)
+
+    def test_proxy_auth_detection(self):
+        self.assertTrue(
+            mobile_proxy._transport_auth_failed(
+                {"status_code": 407, "message": "HTTP 407", "adapter_detail": "curl_cffi"}
+            )
+        )
+        self.assertTrue(
+            mobile_proxy._transport_auth_failed(
+                {"status_code": None, "message": "CONNECT tunnel failed, response 407", "adapter_detail": "proxy"}
+            )
+        )
+        self.assertFalse(
+            mobile_proxy._transport_auth_failed(
+                {"status_code": 200, "message": "HTTP 200", "adapter_detail": "curl_cffi"}
+            )
+        )
+
+    def test_password_input_is_visible_diagnostic_mode(self):
+        source = (TOOLS / "mobile_proxy.py").read_text(encoding="utf-8")
+        self.assertNotIn("getpass.getpass", source)
+        self.assertIn('input("Proxy password (VISIBLE, not saved): ")', source)
 
     def test_no_browser_runtime_dependency(self):
         source = (TOOLS / "mobile_proxy.py").read_text(encoding="utf-8").lower()
