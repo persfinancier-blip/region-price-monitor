@@ -190,8 +190,9 @@ def _one_browser_run(Camoufox, context: ProxyContext, *, visible: bool, sku: str
         ua = page.evaluate("() => navigator.userAgent") or ""
         api = _probe_api(page, sku)
 
+        mode = "visible" if visible else "headless"
         print(
-            f"      run={run_no} api_request_seen={api_request_seen} second_home={second_home} "
+            f"      run={run_no} mode={mode} api_request_seen={api_request_seen} second_home={second_home} "
             f"first_error={first_error or '-'} cookies={len(cookies)} unique={len(names)} "
             f"ext_xcid={READY_COOKIE in names} ui_challenge={ui_challenge} api={api.get('status')}"
         )
@@ -202,6 +203,7 @@ def _one_browser_run(Camoufox, context: ProxyContext, *, visible: bool, sku: str
 
         return {
             "run": run_no,
+            "mode": mode,
             "api_request_seen": api_request_seen,
             "second_home": second_home,
             "first_error": first_error,
@@ -215,15 +217,14 @@ def _one_browser_run(Camoufox, context: ProxyContext, *, visible: bool, sku: str
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="C32: reproduce the observed two-launch success pattern on one exact sticky session")
+    parser = argparse.ArgumentParser(description="C32: reproduce the observed headless-fail -> visible-success pattern on one sticky session")
     parser.add_argument("--proxy")
     parser.add_argument("--sku", default=DEFAULT_SKU)
-    parser.add_argument("--visible", action="store_true")
     args = parser.parse_args()
 
     print("=== Ozon double bootstrap C32 ===")
-    print("ONE fresh sticky session. TWO sequential Camoufox launches on the exact same sticky/IP.")
-    print("This reproduces the observed headless-fail -> visible-success shape without CAPTCHA interaction/submission.\n")
+    print("ONE fresh sticky session. Run #1 HEADLESS, then Run #2 VISIBLE on the exact same sticky/IP.")
+    print("No CAPTCHA interaction/submission. Cached proxy is used automatically.\n")
 
     try:
         raw_proxy = _load_proxy(args.proxy)
@@ -245,8 +246,8 @@ def main() -> int:
         from camoufox import Camoufox
 
     try:
-        print("[2/3] First Camoufox launch on the sticky ...")
-        first = _one_browser_run(Camoufox, context, visible=args.visible, sku=str(args.sku), run_no=1)
+        print("[2/3] Run #1 HEADLESS on the sticky ...")
+        first = _one_browser_run(Camoufox, context, visible=False, sku=str(args.sku), run_no=1)
         time.sleep(2)
         same_ip = _neutral_ip(context)
         print(f"      after_run1_ip={same_ip}")
@@ -254,7 +255,7 @@ def main() -> int:
             print("[EVIDENCE] OZON_C32_STICKY_CHANGED_AFTER_RUN1")
             return 8
 
-        print("[3/3] Second Camoufox launch on the SAME sticky ...")
+        print("[3/3] Run #2 VISIBLE on the SAME sticky ...")
         second = _one_browser_run(Camoufox, context, visible=True, sku=str(args.sku), run_no=2)
         final_ip = _neutral_ip(context)
         print(f"      final_ip={final_ip}")
@@ -266,8 +267,8 @@ def main() -> int:
         for item in (first, second):
             api = item.get("api") or {}
             print(
-                f"run={item['run']} cookies={item['cookie_count']} ext_xcid={item['ext_xcid']} "
-                f"ui_challenge={item['ui_challenge']} api={api.get('status')}"
+                f"run={item['run']} mode={item['mode']} cookies={item['cookie_count']} "
+                f"ext_xcid={item['ext_xcid']} ui_challenge={item['ui_challenge']} api={api.get('status')}"
             )
 
         if second.get("api", {}).get("status") == "price":
