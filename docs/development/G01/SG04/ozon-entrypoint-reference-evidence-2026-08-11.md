@@ -45,28 +45,31 @@ The following claims were described from the owner's/Claude's recovered local `t
 Those claims require the recovered ZIP, `main.py`, CSV outputs, or corresponding artifacts before they can be accepted as durable runtime evidence.
 
 ## Architectural conclusion
-This is a stronger reference for the Ozon **steady-state data reader** than the previously reviewed product-HTML reader: JSON endpoint + `curl_cffi` + regional cookies, no browser in routine reads.
+This is a stronger reference for the Ozon **steady-state data reader** than the previously reviewed product-HTML reader: JSON endpoint + `curl_cffi` + anonymous guest cookies, no browser in routine reads.
 
-It still does not, by itself, satisfy SG04's autonomous primary acceptance because regional cookies are manually provisioned outside the server runtime. It should be tested as the exact owner-supplied Ozon data endpoint once fresh cookie/session evidence is available or the owner explicitly changes the provisioning contract.
+Recovered cookie inspection indicates the historical `test_pars_2` cookies were guest/anonymous and did not reliably establish distinct regional state. Historical apparent regional price differences were also contaminated by the old first-`webPrice` bug. Therefore regional authority must not be assumed to live in those cookie files.
 
 ## C08 live zero-human result
-The owner executed the C08 headless-Playwright bootstrap twice on Windows, first with the workstation VPN enabled and then disabled. Both runs produced the same Ozon-rendered incident page with title `Похоже, нет соединения`; the page advised disabling VPN and included an incident identifier. The local browser-proxy bridge reported no internal error. A small cookie state was created, but the requested `entrypoint-api` request was never observed, so no curl_cffi replay occurred.
+The owner executed the C08 headless-Playwright bootstrap twice on Windows, first with workstation VPN enabled and then disabled. Both runs produced the same Ozon-rendered incident page with title `Похоже, нет соединения`; the local browser-proxy bridge reported no internal error. The requested `entrypoint-api` request was never observed, so no curl_cffi replay occurred.
 
 The second run without workstation VPN means the workstation VPN alone does not explain the failure. C08 proved the browser reached Ozon content through the configured path, but Ozon refused to serve the normal application flow before entrypoint capture.
 
-The original generic `OZON_ZERO_HUMAN_ENTRYPOINT_NOT_OBSERVED` classification was too weak. The historical C08 probe has been repaired so this exact page is typed as `OZON_ZERO_HUMAN_BROWSER_NETWORK_DENIED` on future reruns.
+## C09 historical discriminator
+C09 was prepared to compare headless and headed Playwright through the same ProxyContext. It is retained as historical diagnostic work but is not the current acceptance path.
 
-## C09 discriminator
-Before adding login/session complexity, discriminate route/IP denial from headless-specific denial.
+## C10 deferred regional comparison
+C10 was prepared to compare two city ProxyContexts while reusing one identical anonymous cookie state. The owner correctly stopped this as premature: no regional comparison should be attempted before one-proxy Ozon access itself is proven.
 
-C09 compares `curl_cffi`, Playwright headless and Playwright headed using the same SG02 ProxyContext and requires matching neutral egress identity. Both browser modes then visit the same Ozon SKU with zero user interaction.
+## C11 current one-proxy gate
+C11 is now the active prerequisite. It uses exactly one ProxyContext, one anonymous guest cookie/storage-state file and one SKU. It performs:
+1. neutral curl_cffi egress proof;
+2. one real Ozon product-page request;
+3. one direct `entrypoint-api` request for the same SKU.
 
-Typed evidence includes:
-- `OZON_HEADLESS_SPECIFIC_DENIAL_EVIDENCED` — headless is denied while headed gets farther / observes entrypoint;
-- `OZON_ROUTE_DENIED_BOTH_BROWSER_MODES` — both modes receive the Ozon network/VPN denial on the same proven egress;
-- `OZON_BROWSER_PROXY_BINDING_UNPROVEN` — neutral egress identities do not match;
-- explicit entrypoint-observed gates for either mode.
+No second proxy/city, regional comparison, Playwright, Selenium, login/password or PVZ selection is part of C11.
 
-Headed success is diagnostic only. Linux production acceptance would still require a zero-human Linux/Xvfb or equivalent proof.
+Primary acceptance is `OZON_SINGLE_PROXY_ENTRYPOINT_DATA_ACCESS_PROVEN`: HTTP 200 + decodable JSON from entrypoint, bound to the requested SKU when `pageInfo.url` is present. Product-page HTTP reachability alone is reported separately and cannot masquerade as entrypoint data success.
+
+Only after C11 passes may regional proxy effect work resume.
 
 No cookie values, proxy credentials or authorization headers are committed in this evidence note.
