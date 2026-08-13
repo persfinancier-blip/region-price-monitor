@@ -1,0 +1,7 @@
+proxy.json
+dest_cache.json
+results/
+raw/
+.venv/
+__pycache__/
+*.pyc

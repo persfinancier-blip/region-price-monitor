@@ -1,0 +1,8 @@
+proxy.txt
+cookies/
+profiles/
+debug/
+results/
+.venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,6 @@
+# Чтение цены без браузера — обязательно
+curl-cffi>=0.7
+
+# Разовый прогрев кук — нужен только для warm_cookies.py
+playwright>=1.40
+playwright-stealth>=1.0.6
